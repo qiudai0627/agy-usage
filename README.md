@@ -126,8 +126,9 @@
 agy-usage                    # 终端打印完整报告（支持 -w 5h/today/24h/week/7d/all）
 agy-usage watch              # 终端每 2 秒自动刷新面板
 agy-usage daemon status      # 查看后台网页服务状态（支持 start / stop / restart）
+agy-usage notify on          # 开启 80%/95% 额度提醒与恢复桌面通知（默认 off，随时可关）
 agy-usage clean              # 压缩去重历史快照、轮转日志并清理多余配置备份
-agy-usage doctor             # 只读体检存储占用与空壳记录
+agy-usage doctor             # 先只读体检链路与存储健康（加 --fix 可一键修复配置与孤儿临时文件）
 agy-usage json               # 导出结构化 JSON 数据
 ```
 

@@ -297,6 +297,24 @@ print("CONCURRENCY_OK")
                 )
                 self.assertEqual(c.getresponse().status, 200)
                 c.close()
+
+                # 6. Preferences toggle via /api/preferences -> 200
+                c = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
+                c.request(
+                    "POST",
+                    "/api/preferences",
+                    body='{"notifications_enabled":true}',
+                    headers={
+                        "Host": f"127.0.0.1:{port}",
+                        "Content-Type": "application/json",
+                        "Origin": f"http://127.0.0.1:{port}",
+                    },
+                )
+                pref_resp = c.getresponse()
+                pref_body = json.loads(pref_resp.read().decode("utf-8"))
+                self.assertEqual(pref_resp.status, 200)
+                self.assertTrue(pref_body["preferences"]["notifications_enabled"])
+                c.close()
             finally:
                 proc.terminate()
                 proc.wait(timeout=3)
@@ -304,6 +322,244 @@ print("CONCURRENCY_OK")
                     proc.stdout.close()
                 if proc.stderr:
                     proc.stderr.close()
+
+
+class TestBladeDAndBladeE(unittest.TestCase):
+    def test_f06_1000_sessions_o1_shard_write_and_legacy_migration(self) -> None:
+        code = r"""
+import json, os, time
+from pathlib import Path
+import core
+
+agy = Path(os.environ["AGY_DATA_DIR"])
+cache = Path(os.environ["AGY_USAGE_DATA_DIR"])
+
+# 1. Verify legacy v1 monolithic transcript_index.json migrates and deletes itself
+legacy_p = str(agy / "brain/legacy-conv/.system_generated/logs/transcript.jsonl")
+Path(legacy_p).parent.mkdir(parents=True, exist_ok=True)
+Path(legacy_p).write_text(
+    json.dumps({"step_index": 1, "created_at": "2026-11-20T08:00:00Z", "model": "gemini-4-neon", "input_tokens": 100, "output_tokens": 10}) + "\n",
+    encoding="utf-8",
+)
+st0 = Path(legacy_p).stat()
+core.TRANSCRIPT_INDEX_FILE.write_text(
+    json.dumps({
+        "version": 1,
+        "files": {
+            legacy_p: {
+                "mtime_ns": st0.st_mtime_ns,
+                "size": st0.st_size,
+                "events": [{
+                    "conversation_id": "legacy-conv", "step_index": 1, "ts_iso": "2026-11-20T08:00:00+00:00",
+                    "model": "gemini-4-neon", "pool": "gemini_pro", "input_tokens": 100, "cache_read_tokens": 0,
+                    "output_tokens": 10, "total_tokens": 110, "billable_tokens": 110, "context_size": 100,
+                    "est_cost_usd": 0.001, "cache_saved_usd": 0.0, "tool_count": 0, "tool_names": [],
+                    "has_thinking": False, "has_error": False,
+                }]
+            }
+        }
+    }),
+    encoding="utf-8",
+)
+
+# 2. Populate 1,000 synthetic sessions
+line_tpl = json.dumps({"step_index": 1, "created_at": "2026-11-25T10:00:00Z", "model": "gemini-4-neon", "input_tokens": 500, "output_tokens": 50}) + "\n"
+for idx in range(1000):
+    d = agy / "brain" / f"conv-{idx:04d}" / ".system_generated" / "logs"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "transcript.jsonl").write_text(line_tpl, encoding="utf-8")
+
+evs = core.load_transcript_events()
+assert len(evs) == 1001, len(evs)
+assert not core.TRANSCRIPT_INDEX_FILE.exists(), "Legacy monolithic index should be retired"
+shards = list(core.CONV_CACHE_DIR.glob("*.json"))
+assert len(shards) == 1001, len(shards)
+
+# Snapshot shard mtimes before single-session update
+before_mtimes = {p.name: p.stat().st_mtime_ns for p in shards}
+time.sleep(0.02)
+
+# Modify ONLY 1 session out of 1,001
+target = agy / "brain" / "conv-0500" / ".system_generated" / "logs" / "transcript.jsonl"
+with target.open("a", encoding="utf-8") as fh:
+    fh.write(json.dumps({"step_index": 2, "created_at": "2026-11-25T10:05:00Z", "model": "claude-opus-5-5", "input_tokens": 800, "output_tokens": 120}) + "\n")
+
+t0 = time.perf_counter()
+evs2 = core.load_transcript_events()
+elapsed_ms = (time.perf_counter() - t0) * 1000.0
+assert len(evs2) == 1002, len(evs2)
+
+changed_shards = [p for p in core.CONV_CACHE_DIR.glob("*.json") if before_mtimes.get(p.name) != p.stat().st_mtime_ns]
+written_bytes = sum(p.stat().st_size for p in changed_shards)
+assert len(changed_shards) == 1, f"Expected O(1) 1 shard write, got {len(changed_shards)}"
+assert written_bytes < 4096, f"Expected < 4KB written, got {written_bytes}"
+print(f"F06_OK elapsed_ms={elapsed_ms:.1f} written_bytes={written_bytes}")
+"""
+        self.assertIn("F06_OK", _run_in_sandbox(code))
+
+    def test_f08_f09_weblog_inode_and_doctor_readonly_then_fix(self) -> None:
+        code = r"""
+import json, os
+from pathlib import Path
+import core
+
+# 1. F08: Active O_APPEND fd keeps writing to the exact same inode after rotate_web_log
+core.ensure_data_dir()
+append_fh = core.WEB_LOG_FILE.open("ab")
+try:
+    append_fh.write((b"X" * 99 + b"\n") * 7000)  # ~700 KB
+    append_fh.flush()
+    ino_before = core.WEB_LOG_FILE.stat().st_ino
+    freed = core.rotate_web_log(max_bytes=512 * 1024, keep_bytes=128 * 1024)
+    assert freed > 500 * 1024, freed
+    assert core.WEB_LOG_FILE.stat().st_ino == ino_before, "Inode changed during log rotation!"
+    append_fh.write(b"LIVE_FD_AFTER_ROTATE_OK\n")
+    append_fh.flush()
+finally:
+    append_fh.close()
+
+tail_txt = core.WEB_LOG_FILE.read_text("utf-8")
+assert tail_txt.endswith("LIVE_FD_AFTER_ROTATE_OK\n"), tail_txt[-80:]
+assert core.WEB_LOG_FILE.stat().st_size < 160 * 1024
+
+# 2. F09 & doctor --fix: Read-only first, then repair corrupt lines + orphan tmp + missing statusLine
+core.DAILY_ARCHIVE_FILE.write_text(
+    '{"date":"2026-10-01","buckets":{"gemini-weekly":{"min_rem":0.5,"last_rem":0.6,"samples":2}}}\n'
+    '{corrupt_archive_line\n'
+    '{"date":"2026-10-02","buckets":{"gemini-weekly":{"min_rem":0.7,"last_rem":0.7,"samples":1}}}\n',
+    encoding="utf-8",
+)
+orphan = core.DATA_DIR / ".orphan_test.tmp"
+orphan.write_text("stale", encoding="utf-8")
+
+rep_ro = core.run_doctor(stale_days=30, fix_issues=False)
+pipe_ro = rep_ro["pipeline"]
+assert pipe_ro["statusline_enabled"] is False
+assert pipe_ro["corrupt_archive_lines"] == 1
+assert pipe_ro["orphan_tmp_count"] == 1
+assert orphan.exists(), "Read-only doctor must NOT delete files before --fix!"
+
+rep_fix = core.run_doctor(stale_days=30, fix_issues=True)
+assert rep_fix["pipeline"]["statusline_enabled"] is True
+assert rep_fix["pipeline"]["corrupt_archive_lines"] == 0
+assert rep_fix["pipeline"]["orphan_tmp_count"] == 0
+assert not orphan.exists()
+arch_rows = [json.loads(ln) for ln in core.DAILY_ARCHIVE_FILE.read_text("utf-8").splitlines() if ln.strip()]
+assert [r["date"] for r in arch_rows] == ["2026-10-01", "2026-10-02"], arch_rows
+cfg = core.load_agy_settings()
+assert cfg["statusLine"]["stack_with_default"] is True, cfg
+print("F08_F09_DOCTOR_OK")
+"""
+        self.assertIn("F08_F09_DOCTOR_OK", _run_in_sandbox(code, {"AGY_USAGE_SUPPRESS_OS_NOTIFY": "1"}))
+
+    def test_candidate_a_notifications_dedup_and_confirmed_recovery(self) -> None:
+        code = r"""
+from datetime import datetime, timedelta, timezone
+import core
+
+now = datetime.now(timezone.utc)
+c1_reset = (now + timedelta(hours=3)).isoformat()
+c2_reset = (now + timedelta(hours=8)).isoformat()
+
+# Default must be off
+assert core.get_preferences()["notifications_enabled"] is False
+core.set_preferences(notifications_enabled=True)
+assert core.get_preferences()["notifications_enabled"] is True
+
+def eval_q(rem_frac: float, reset_iso: str, source: str = "statusline", captured_dt=None):
+    cap = (captured_dt or now).isoformat()
+    ls = {"captured_at": cap, "source": source, "quota": {"gemini-5h": {"remaining_fraction": rem_frac, "reset_time": reset_iso}}}
+    q_info = core.analyze_quota_buckets(ls, [], [], now)
+    return core.evaluate_quota_notifications(q_info, now=now, dispatch=False)
+
+# 1. Cross 80% used -> fires alert_80 once
+r1 = eval_q(0.18, c1_reset)  # 82% used
+assert [x["kind"] for x in r1["triggered"]] == ["alert_80"], r1
+# Poll again at 84% -> deduplicated (0 alerts)
+r2 = eval_q(0.16, c1_reset)
+assert r2["triggered"] == [], r2
+
+# 2. Cross 95% used -> fires alert_95 once
+r3 = eval_q(0.04, c1_reset)  # 96% used
+assert [x["kind"] for x in r3["triggered"]] == ["alert_95"], r3
+r4 = eval_q(0.03, c1_reset)
+assert r4["triggered"] == [], r4
+
+# 3. Countdown hits zero (`reset_passed == True`) WITHOUT fresh post-reset telemetry -> MUST NOT fire recovery!
+past_reset = (now - timedelta(minutes=2)).isoformat()
+r_expired = eval_q(0.03, past_reset)
+assert r_expired["triggered"] == [], f"Countdown zero must not fake recovery: {r_expired}"
+
+# 4. Fresh official statusline confirms reset (used_pct drops to 4% on new cycle) -> fires recovery ONCE
+r_rec = eval_q(0.96, c2_reset, source="statusline")
+assert [x["kind"] for x in r_rec["triggered"]] == ["recovery"], r_rec
+r_rec_dup = eval_q(0.95, c2_reset, source="statusline")
+assert r_rec_dup["triggered"] == [], r_rec_dup
+print("CANDIDATE_A_OK")
+"""
+        self.assertIn("CANDIDATE_A_OK", _run_in_sandbox(code, {"AGY_USAGE_SUPPRESS_OS_NOTIFY": "1"}))
+
+    def test_candidate_b_week_over_week_and_timezone_override(self) -> None:
+        code = r"""
+from datetime import datetime, timedelta, timezone
+import core
+
+tz = core.get_local_tz()
+assert core.get_tz_label() == "UTC+9", core.get_tz_label()
+
+# Wednesday 14:00 UTC+9 -> 62 hours into current natural week
+wed_local = datetime(2026, 11, 25, 14, 0, 0, tzinfo=tz)
+now_utc = wed_local.astimezone(timezone.utc)
+this_mon = datetime(2026, 11, 23, 0, 0, 0, tzinfo=tz).astimezone(timezone.utc)
+last_mon = this_mon - timedelta(days=7)
+
+def mk_ev(dt_utc, tok):
+    return {
+        "conversation_id": "c1",
+        "ts": dt_utc,
+        "input_tokens": tok,
+        "cache_read_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": tok,
+        "billable_tokens": tok,
+        "est_cost_usd": 0.1,
+        "cache_saved_usd": 0.0,
+        "tool_count": 0,
+    }
+
+# Case 1: Only current-week events -> missing prior-week sample -> comparable == False
+cur_only = [mk_ev(this_mon + timedelta(hours=10), 80_000)]
+w_missing = core.compute_week_over_week(cur_only, now=now_utc, tz=tz)
+assert w_missing["comparable"] is False, w_missing
+
+# Case 2: Prior week has 100k within same 62h progress + 900k on Friday (after 62h); current week has 80k
+# Same-progress comparison must compare 80k vs 100k (-20.0%), NOT 80k vs 1,000k!
+both = sorted(
+    [
+        mk_ev(last_mon + timedelta(hours=20), 100_000),
+        mk_ev(last_mon + timedelta(hours=110), 900_000),
+        mk_ev(this_mon + timedelta(hours=20), 80_000),
+    ],
+    key=lambda x: x["ts"],
+)
+w_ok = core.compute_week_over_week(both, now=now_utc, tz=tz)
+assert w_ok["comparable"] is True, w_ok
+assert w_ok["delta_pct"] == -20.0, w_ok
+assert "-20.0%" in w_ok["badge_text"], w_ok
+
+# CSV formula injection check
+assert core._safe_csv_cell("=CMD|' /C calc'!A0") == "'=CMD|' /C calc'!A0"
+assert core._safe_csv_cell("@evil") == "'@evil"
+print("CANDIDATE_B_TZ_OK")
+"""
+        self.assertIn("CANDIDATE_B_TZ_OK", _run_in_sandbox(code, {"AGY_USAGE_TZ": "+09:00"}))
+
+    def test_f12_ps1_bom_and_bat_nobom(self) -> None:
+        for ps_name in ("install.ps1", "uninstall.ps1"):
+            raw = (ROOT_DIR / ps_name).read_bytes()
+            self.assertTrue(raw.startswith(b"\xef\xbb\xbf"), f"{ps_name} must start with UTF-8 BOM")
+        bat = (ROOT_DIR / "Start-Windows.bat").read_bytes()
+        self.assertFalse(bat.startswith(b"\xef\xbb\xbf"), "Start-Windows.bat must not start with UTF-8 BOM")
 
 
 if __name__ == "__main__":

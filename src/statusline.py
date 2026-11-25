@@ -25,12 +25,15 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from core import (  # noqa: E402
     LIVE_STATE_FILE,
+    analyze_quota_buckets,
     atomic_write_text,
     ensure_data_dir,
+    evaluate_quota_notifications,
     extract_remaining_fraction,
     file_lock,
     fmt_cst,
     fmt_tokens,
+    get_preferences,
     infer_bucket_meta,
     load_agy_settings,
     parse_iso_dt,
@@ -155,6 +158,10 @@ def persist_state(payload: Dict[str, Any]) -> None:
                     "total_output_tokens": ctx.get("total_output_tokens"),
                 },
             )
+            if get_preferences().get("notifications_enabled"):
+                now_dt = datetime.now(timezone.utc)
+                q_info = analyze_quota_buckets(state, [], [], now_dt)
+                evaluate_quota_notifications(q_info, now=now_dt, dispatch=True)
     except Exception as exc:
         if os.environ.get("AGY_USAGE_DEBUG"):
             sys.stderr.write(f"agy-usage persist warning: {exc}\n")

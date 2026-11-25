@@ -10,17 +10,58 @@ import json
 import os
 import re
 import sqlite3
+import sys
 from collections import Counter, defaultdict
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
+import hashlib
 import math
 from pathlib import Path
+import subprocess
 import tempfile
 import threading
 import time
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 CST = timezone(timedelta(hours=8))
+
+
+def get_local_tz() -> tzinfo:
+    """Return configured or system local timezone (defaults to system timezone, fallback UTC+8)."""
+    override = os.environ.get("AGY_USAGE_TZ", "").strip()
+    if override:
+        up = override.upper()
+        if up in ("UTC", "Z"):
+            return timezone.utc
+        if up in ("CST", "ASIA/SHANGHAI", "UTC+8", "+08:00", "+8"):
+            return CST
+        m = re.match(r"^([+-])(\d{1,2})(?::?(\d{2}))?$", up)
+        if m:
+            sign = 1 if m.group(1) == "+" else -1
+            hh = int(m.group(2))
+            mm = int(m.group(3) or "0")
+            return timezone(timedelta(minutes=sign * (hh * 60 + mm)))
+    try:
+        tz = datetime.now().astimezone().tzinfo
+        return tz if tz is not None else CST
+    except Exception:
+        return CST
+
+
+def get_tz_label() -> str:
+    tz = get_local_tz()
+    now_local = datetime.now(tz)
+    off = now_local.utcoffset()
+    if off is None:
+        return "Local"
+    total_min = int(round(off.total_seconds() / 60.0))
+    if total_min == 0:
+        return "UTC"
+    if total_min == 480:
+        return "UTC+8"
+    sign = "+" if total_min >= 0 else "-"
+    hh, mm = divmod(abs(total_min), 60)
+    return f"UTC{sign}{hh}" if mm == 0 else f"UTC{sign}{hh}:{mm:02d}"
 
 def _default_data_dir() -> Path:
     if os.name == "nt":
@@ -52,8 +93,22 @@ DATA_DIR = Path(os.environ.get("AGY_USAGE_DATA_DIR", str(_default_data_dir())))
 LIVE_STATE_FILE = DATA_DIR / "live_state.json"
 SNAPSHOTS_FILE = DATA_DIR / "quota_snapshots.jsonl"
 TRANSCRIPT_INDEX_FILE = DATA_DIR / "transcript_index.json"
+CONV_CACHE_DIR = DATA_DIR / "conv_cache"
 DAILY_ARCHIVE_FILE = DATA_DIR / "quota_daily_archive.jsonl"
+PREFERENCES_FILE = DATA_DIR / "preferences.json"
+NOTIFY_STATE_FILE = DATA_DIR / "notify_state.json"
 WEB_LOG_FILE = DATA_DIR / "web.log"
+
+
+def discover_settings_file() -> Path:
+    """Resolve active Antigravity settings.json across CLI and Desktop directories."""
+    if os.environ.get("AGY_DATA_DIR"):
+        return AGY_DIR / "settings.json"
+    for d in _discover_agy_dirs():
+        cand = d / "settings.json"
+        if cand.exists():
+            return cand
+    return SETTINGS_FILE
 
 # Two-tier incremental cache: path -> (mtime_ns, size, parsed_events)
 _CACHE_LOCK = threading.RLock()
@@ -184,7 +239,7 @@ def parse_iso_dt(value: Optional[str]) -> Optional[datetime]:
 def fmt_cst(dt: Optional[datetime], fmt: str = "%m-%d %H:%M") -> str:
     if dt is None:
         return "-"
-    return dt.astimezone(CST).strftime(fmt)
+    return dt.astimezone(get_local_tz()).strftime(fmt)
 
 
 def fmt_duration(seconds: Optional[float]) -> str:
@@ -346,12 +401,19 @@ def load_conversation_metadata() -> Dict[str, Dict[str, Any]]:
 
 
 def load_agy_settings() -> Dict[str, Any]:
-    if not SETTINGS_FILE.exists():
+    sf = discover_settings_file()
+    if not sf.exists():
         return {}
     try:
-        return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+        d = json.loads(sf.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
     except Exception:
         return {}
+
+
+def _conv_cache_file(path_str: str) -> Path:
+    digest = hashlib.sha1(path_str.encode("utf-8", errors="replace")).hexdigest()[:20]
+    return CONV_CACHE_DIR / f"{digest}.json"
 
 
 def _hydrate_event_ts(ev: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -377,11 +439,35 @@ def _safe_nonneg_int(val: Any) -> Optional[int]:
         return None
 
 
+def _save_single_conv_cache(path_str: str, mtime_ns: int, size: int, evs: List[Dict[str, Any]]) -> None:
+    try:
+        CONV_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        serializable = [{k: v for k, v in e.items() if k != "ts"} for e in evs]
+        payload = json.dumps(
+            {"version": 2, "path": path_str, "mtime_ns": mtime_ns, "size": size, "events": serializable},
+            ensure_ascii=False,
+        )
+        atomic_write_text(_conv_cache_file(path_str), payload)
+    except Exception:
+        pass
+
+
+def _remove_single_conv_cache(path_str: str) -> None:
+    try:
+        _conv_cache_file(path_str).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def _load_disk_transcript_index() -> None:
+    """Load per-conversation cache shards (and seamlessly migrate legacy monolithic index once)."""
     global _DISK_INDEX_LOADED
     with _CACHE_LOCK:
         if _DISK_INDEX_LOADED:
             return
+        CONV_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+        # One-time migration from legacy v1 monolithic transcript_index.json
         if TRANSCRIPT_INDEX_FILE.exists():
             try:
                 raw = json.loads(TRANSCRIPT_INDEX_FILE.read_text(encoding="utf-8"))
@@ -399,25 +485,33 @@ def _load_disk_transcript_index() -> None:
                                 if h is not None:
                                     evs.append(h)
                         _MEM_TRANSCRIPT_CACHE[path_str] = (mtime_ns, size, evs)
+                        _save_single_conv_cache(path_str, mtime_ns, size, evs)
+                TRANSCRIPT_INDEX_FILE.unlink(missing_ok=True)
             except Exception:
                 pass
+
+        # Load v2 per-session cache shards
+        for shard in CONV_CACHE_DIR.glob("*.json"):
+            try:
+                info = json.loads(shard.read_text(encoding="utf-8"))
+                if not isinstance(info, dict):
+                    continue
+                path_str = info.get("path")
+                if not isinstance(path_str, str) or not path_str:
+                    continue
+                mtime_ns = _safe_nonneg_int(info.get("mtime_ns")) or 0
+                size = _safe_nonneg_int(info.get("size")) or 0
+                evs = []
+                for item in info.get("events") or []:
+                    if isinstance(item, dict):
+                        h = _hydrate_event_ts(item)
+                        if h is not None:
+                            evs.append(h)
+                _MEM_TRANSCRIPT_CACHE[path_str] = (mtime_ns, size, evs)
+            except Exception:
+                continue
+
         _DISK_INDEX_LOADED = True
-
-
-def _save_disk_transcript_index() -> None:
-    try:
-        ensure_data_dir()
-        with _CACHE_LOCK:
-            snapshot_items = list(_MEM_TRANSCRIPT_CACHE.items())
-        files_out: Dict[str, Any] = {}
-        for path_str, (mtime_ns, size, evs) in snapshot_items:
-            serializable = [{k: v for k, v in e.items() if k != "ts"} for e in evs]
-            files_out[path_str] = {"mtime_ns": mtime_ns, "size": size, "events": serializable}
-        payload = json.dumps({"version": 1, "files": files_out}, ensure_ascii=False)
-        with file_lock(TRANSCRIPT_INDEX_FILE.with_name(".index.lock"), timeout=1.5):
-            atomic_write_text(TRANSCRIPT_INDEX_FILE, payload)
-    except Exception:
-        pass
 
 
 def _parse_single_transcript(p: Path, cid: str) -> List[Dict[str, Any]]:
@@ -476,7 +570,7 @@ def load_transcript_events() -> List[Dict[str, Any]]:
     events: List[Dict[str, Any]] = []
     seen_convs = set()
     active_paths = set()
-    dirty = False
+    updated_shards: List[Tuple[str, int, int, List[Dict[str, Any]]]] = []
 
     for agy_root in _discover_agy_dirs():
         brain_dir = agy_root / "brain"
@@ -503,20 +597,23 @@ def load_transcript_events() -> List[Dict[str, Any]]:
                     parsed = _parse_single_transcript(p, cid)
                     with _CACHE_LOCK:
                         _MEM_TRANSCRIPT_CACHE[path_str] = (st.st_mtime_ns, st.st_size, parsed)
+                    updated_shards.append((path_str, st.st_mtime_ns, st.st_size, parsed))
                     events.extend(parsed)
-                    dirty = True
             except Exception:
                 continue
 
     with _CACHE_LOCK:
         stale_keys = [k for k in list(_MEM_TRANSCRIPT_CACHE.keys()) if k not in active_paths]
-        if stale_keys:
-            for k in stale_keys:
-                _MEM_TRANSCRIPT_CACHE.pop(k, None)
-            dirty = True
+        for k in stale_keys:
+            _MEM_TRANSCRIPT_CACHE.pop(k, None)
 
-    if dirty:
-        _save_disk_transcript_index()
+    # O(1) disk persistence: only write changed session shards & unlink removed ones
+    if updated_shards or stale_keys:
+        with file_lock(DATA_DIR / ".index.lock", timeout=1.5):
+            for path_str, mtime_ns, size, parsed in updated_shards:
+                _save_single_conv_cache(path_str, mtime_ns, size, parsed)
+            for k in stale_keys:
+                _remove_single_conv_cache(k)
 
     events.sort(key=lambda e: e["ts"])
     return events
@@ -686,8 +783,8 @@ def analyze_quota_buckets(
             cycle_start_dt = reset_dt - timedelta(hours=cycle_hours)
             elapsed_h = max(0.0, (now - cycle_start_dt).total_seconds() / 3600.0)
             time_elapsed_pct = round(min(100.0, (elapsed_h / cycle_hours) * 100.0), 2)
-            min_elapsed_h = 0.25 if window_kind == "five_hour" else 2.0
-            if not reset_passed and used_pct is not None and used_pct >= 1.0 and elapsed_h >= min_elapsed_h and time_elapsed_pct > 0.5:
+            min_elapsed_h = 0.5 if window_kind == "five_hour" else 6.0
+            if not reset_passed and used_pct is not None and used_pct >= 2.0 and elapsed_h >= min_elapsed_h and time_elapsed_pct > 0.5:
                 pacing_ratio = round(used_pct / time_elapsed_pct, 2)
             if not reset_passed and rem_pct is not None and reset_in_sec is not None and reset_in_sec > 60:
                 rem_hours = reset_in_sec / 3600.0
@@ -748,7 +845,7 @@ def analyze_quota_buckets(
             if dt_hours >= 0.05 and delta_used >= 0.05:
                 burn_pct_per_hour = round(delta_used / dt_hours, 3)
                 burn_method = "observed"
-                if pool_key != "other":
+                if pool_key != "other" and delta_used >= 0.2:
                     win_tokens = sum(
                         e["billable_tokens"]
                         for e in events
@@ -775,10 +872,10 @@ def analyze_quota_buckets(
             status = "disabled"
         elif reset_passed:
             status = "reset_ready"
-        elif rem_pct is not None:
-            if rem_pct <= 10:
+        elif used_pct is not None:
+            if used_pct >= 80.0:
                 status = "critical"
-            elif rem_pct <= 25 or (pacing_ratio is not None and pacing_ratio >= 1.35):
+            elif used_pct >= 55.0 or (pacing_ratio is not None and pacing_ratio >= 1.35):
                 status = "warning"
 
         buckets.append(
@@ -864,6 +961,292 @@ def summarize_events(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def get_preferences() -> Dict[str, Any]:
+    """Load user preferences (desktop notifications default to False / toggleable)."""
+    defaults: Dict[str, Any] = {"notifications_enabled": False}
+    if not PREFERENCES_FILE.exists():
+        return defaults
+    try:
+        raw = json.loads(PREFERENCES_FILE.read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            defaults["notifications_enabled"] = bool(raw.get("notifications_enabled", False))
+    except Exception:
+        pass
+    return defaults
+
+
+def set_preferences(notifications_enabled: Optional[bool] = None) -> Dict[str, Any]:
+    ensure_data_dir()
+    with file_lock(PREFERENCES_FILE.with_name(".prefs.lock"), timeout=1.5):
+        prefs = get_preferences()
+        if notifications_enabled is not None:
+            prefs["notifications_enabled"] = bool(notifications_enabled)
+        prefs["updated_at"] = datetime.now(timezone.utc).isoformat()
+        atomic_write_text(PREFERENCES_FILE, json.dumps(prefs, ensure_ascii=False, indent=2))
+    return prefs
+
+
+def _dispatch_os_notification(title: str, message: str) -> None:
+    """Safely send a native local desktop notification without shell interpolation."""
+    if os.environ.get("AGY_USAGE_SUPPRESS_OS_NOTIFY") == "1":
+        return
+    try:
+        if sys.platform == "darwin":
+            script = "on run argv\ndisplay notification (item 2 of argv) with title (item 1 of argv)\nend run"
+            subprocess.Popen(
+                ["osascript", "-e", script, title, message],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        elif os.name == "nt":
+            # Safe argument-passed PowerShell BalloonTip fallback on Windows
+            ps_code = (
+                "Add-Type -AssemblyName System.Windows.Forms;"
+                "$n = New-Object System.Windows.Forms.NotifyIcon;"
+                "$n.Icon = [System.Drawing.SystemIcons]::Information;"
+                "$n.Visible = $true;"
+                "$n.ShowBalloonTip(5000, $args[0], $args[1], [System.Windows.Forms.ToolTipIcon]::Info);"
+                "Start-Sleep -Seconds 5; $n.Dispose()"
+            )
+            subprocess.Popen(
+                ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps_code, title, message],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=0x00000008 | 0x00000200,
+            )
+        else:
+            subprocess.Popen(
+                ["notify-send", title, message],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+    except Exception:
+        pass
+
+
+def evaluate_quota_notifications(
+    quota_info: Dict[str, Any],
+    now: Optional[datetime] = None,
+    dispatch: bool = True,
+) -> Dict[str, Any]:
+    """Candidate A: Deduplicated 80%/95% alerts & fresh-telemetry-confirmed recovery notifications.
+
+    Rules:
+    - Default off (`notifications_enabled == False`); state still tracked quietly so enabling won't misfire old events.
+    - Deduplicated per `(bucket_id, cycle_key)` across process restarts.
+    - Countdown hitting zero (`reset_passed == True`) NEVER counts as recovery; only fresh official
+      `statusline` data (`stale_seconds <= 600` and `not reset_passed`) confirming low `used_pct <= 15%`
+      after prior `max_used_pct >= 50%` triggers recovery notification.
+    """
+    ensure_data_dir()
+    now_dt = now or datetime.now(timezone.utc)
+    prefs = get_preferences()
+    enabled = bool(prefs.get("notifications_enabled", False))
+
+    source = str(quota_info.get("source") or "")
+    stale_sec = quota_info.get("stale_seconds")
+    is_fresh_official = (
+        bool(quota_info.get("has_live_quota"))
+        and source == "statusline"
+        and stale_sec is not None
+        and float(stale_sec) <= 600.0
+    )
+
+    triggered: List[Dict[str, Any]] = []
+    with file_lock(NOTIFY_STATE_FILE.with_name(".notify.lock"), timeout=1.0) as locked:
+        state: Dict[str, Any] = {"buckets": {}, "recent_events": []}
+        if NOTIFY_STATE_FILE.exists():
+            try:
+                loaded = json.loads(NOTIFY_STATE_FILE.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    if isinstance(loaded.get("buckets"), dict):
+                        state["buckets"] = loaded["buckets"]
+                    if isinstance(loaded.get("recent_events"), list):
+                        state["recent_events"] = loaded["recent_events"]
+            except Exception:
+                pass
+
+        if locked and quota_info.get("has_live_quota"):
+            dirty = False
+            b_states: Dict[str, Any] = state["buckets"]
+            for b in quota_info.get("buckets") or []:
+                bid = str(b.get("id") or "")
+                used = b.get("used_pct")
+                if not bid or used is None or b.get("disabled"):
+                    continue
+                used_f = float(used)
+                reset_passed = bool(b.get("reset_passed"))
+                cycle_key = str(b.get("reset_time") or "rolling")
+                prev = b_states.get(bid) if isinstance(b_states.get(bid), dict) else None
+
+                # Do NOT advance state or fire recovery merely because countdown expired (`reset_passed`)
+                if reset_passed:
+                    continue
+
+                # 1. Check fresh-official-confirmed recovery (回血)
+                if prev is not None and is_fresh_official:
+                    prev_cycle = str(prev.get("cycle_key") or "")
+                    prev_max = float(prev.get("max_used_pct") or 0.0)
+                    recovered_key = f"{cycle_key}:{round(used_f, 1)}"
+                    if (
+                        prev_max >= 50.0
+                        and used_f <= 15.0
+                        and (cycle_key != prev_cycle or (prev_max - used_f) >= 40.0)
+                        and prev.get("last_recovery_cycle") != cycle_key
+                    ):
+                        ev = {
+                            "ts": now_dt.isoformat(),
+                            "ts_cst": fmt_cst(now_dt, "%m-%d %H:%M"),
+                            "kind": "recovery",
+                            "bucket": bid,
+                            "title": f"{b['label']} 已回血恢复",
+                            "message": f"最新官方额度确认已恢复至已用 {used_f:.1f}%（重置 {b.get('reset_time_cst') or '-'}）。",
+                        }
+                        triggered.append(ev)
+                        prev = {
+                            "cycle_key": cycle_key,
+                            "max_used_pct": used_f,
+                            "alerted_80": False,
+                            "alerted_95": False,
+                            "last_recovery_cycle": cycle_key,
+                            "recovered_sig": recovered_key,
+                        }
+                        b_states[bid] = prev
+                        dirty = True
+
+                # Reset per-cycle tracking if cycle_key changed without triggering recovery
+                if prev is None or str(prev.get("cycle_key") or "") != cycle_key:
+                    prev = {
+                        "cycle_key": cycle_key,
+                        "max_used_pct": used_f,
+                        "alerted_80": False,
+                        "alerted_95": False,
+                        "last_recovery_cycle": prev.get("last_recovery_cycle") if isinstance(prev, dict) else "",
+                    }
+                    b_states[bid] = prev
+                    dirty = True
+                else:
+                    if used_f > float(prev.get("max_used_pct") or 0.0):
+                        prev["max_used_pct"] = used_f
+                        dirty = True
+
+                # 2. Check rising-edge 95% and 80% thresholds (deduplicated per cycle)
+                if used_f >= 95.0 and not prev.get("alerted_95"):
+                    prev["alerted_95"] = True
+                    prev["alerted_80"] = True
+                    dirty = True
+                    if is_fresh_official or source == "manual":
+                        triggered.append(
+                            {
+                                "ts": now_dt.isoformat(),
+                                "ts_cst": fmt_cst(now_dt, "%m-%d %H:%M"),
+                                "kind": "alert_95",
+                                "bucket": bid,
+                                "title": f"{b['label']} 已用 {used_f:.1f}%（即将耗尽）",
+                                "message": f"仅剩 {b.get('remaining_pct', 0):.1f}%，距离重置 {b.get('reset_in_text') or '-'}。",
+                            }
+                        )
+                elif used_f >= 80.0 and not prev.get("alerted_80"):
+                    prev["alerted_80"] = True
+                    dirty = True
+                    if is_fresh_official or source == "manual":
+                        triggered.append(
+                            {
+                                "ts": now_dt.isoformat(),
+                                "ts_cst": fmt_cst(now_dt, "%m-%d %H:%M"),
+                                "kind": "alert_80",
+                                "bucket": bid,
+                                "title": f"{b['label']} 已用达 {used_f:.1f}%",
+                                "message": f"剩余 {b.get('remaining_pct', 0):.1f}%，距离重置 {b.get('reset_in_text') or '-'}。",
+                            }
+                        )
+
+            if triggered:
+                state["recent_events"] = (triggered + state["recent_events"])[:12]
+                dirty = True
+
+            if dirty:
+                atomic_write_text(NOTIFY_STATE_FILE, json.dumps(state, ensure_ascii=False, indent=2))
+
+    if enabled and dispatch and triggered:
+        for ev in triggered:
+            _dispatch_os_notification(ev["title"], ev["message"])
+
+    return {
+        "enabled": enabled,
+        "triggered": triggered,
+        "recent_events": state.get("recent_events", [])[:8],
+    }
+
+
+def compute_week_over_week(
+    events: List[Dict[str, Any]],
+    now: datetime,
+    tz: tzinfo,
+) -> Dict[str, Any]:
+    """Candidate B: Same-timezone, same-elapsed-progress natural week comparison (本周 vs 上周同进度).
+
+    Never fabricates comparison when prior-week samples are missing; explicitly distinguishes natural
+    calendar week Token usage from rolling quota buckets.
+    """
+    now_local = now.astimezone(tz)
+    this_monday_local = (now_local - timedelta(days=now_local.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    this_monday_utc = this_monday_local.astimezone(timezone.utc)
+    elapsed = now - this_monday_utc
+    elapsed_hours = round(max(0.0, elapsed.total_seconds() / 3600.0), 2)
+
+    last_monday_local = this_monday_local - timedelta(days=7)
+    last_monday_utc = last_monday_local.astimezone(timezone.utc)
+    last_same_point_utc = last_monday_utc + elapsed
+
+    cur_evs = [e for e in events if this_monday_utc <= e["ts"] <= now]
+    prev_evs = [e for e in events if last_monday_utc <= e["ts"] <= last_same_point_utc]
+    cur_sum = summarize_events(cur_evs)
+    prev_sum = summarize_events(prev_evs)
+
+    earliest_ts = events[0]["ts"] if events else None
+    has_prior_coverage = earliest_ts is not None and earliest_ts <= last_same_point_utc and earliest_ts < this_monday_utc
+
+    if elapsed_hours < 2.0:
+        return {
+            "comparable": False,
+            "reason": "本周刚开始不足 2 小时，暂不计算同进度环比",
+            "badge_text": "环比待累积",
+            "elapsed_hours": elapsed_hours,
+            "current": cur_sum,
+            "previous": prev_sum,
+            "delta_pct": None,
+        }
+
+    if not has_prior_coverage or prev_sum["billable_tokens"] <= 0:
+        return {
+            "comparable": False,
+            "reason": "上周同进度缺少本地历史样本，暂不可比",
+            "badge_text": "较上周: 暂不可比",
+            "elapsed_hours": elapsed_hours,
+            "current": cur_sum,
+            "previous": prev_sum,
+            "delta_pct": None,
+        }
+
+    delta_pct = round(
+        ((cur_sum["billable_tokens"] - prev_sum["billable_tokens"]) / float(prev_sum["billable_tokens"])) * 100.0,
+        1,
+    )
+    sign = "+" if delta_pct > 0 else ""
+    return {
+        "comparable": True,
+        "reason": f"自然周同进度对比（周一 00:00 起 {elapsed_hours:.1f}h，非配额重置周期）",
+        "badge_text": f"同进度较上周 {sign}{delta_pct:.1f}%",
+        "elapsed_hours": elapsed_hours,
+        "current": cur_sum,
+        "previous": prev_sum,
+        "delta_pct": delta_pct,
+    }
+
+
 def build_insights(
     quota_info: Dict[str, Any],
     windows_summary: Dict[str, Any],
@@ -873,14 +1256,14 @@ def build_insights(
 ) -> List[Dict[str, str]]:
     insights: List[Dict[str, str]] = []
 
-    # 1. Quota alerts
+    # 1. Quota alerts (neutral factual pacing notes; Candidate C cross-pool persuasion explicitly omitted)
     for b in quota_info.get("buckets") or []:
         if b["status"] == "critical":
             insights.append(
                 {
                     "level": "crit",
-                    "title": f"{b['label']} 告急",
-                    "detail": f"仅剩 {b['remaining_pct']:.1f}%，距离重置还剩 {b['reset_in_text']}，建议切换轻量模型或暂缓重任务。",
+                    "title": f"{b['label']} 已用 {b['used_pct']:.1f}%",
+                    "detail": f"仅剩 {b['remaining_pct']:.1f}%，距离重置还剩 {b['reset_in_text']}，请留意重任务节奏。",
                 }
             )
         elif b["status"] == "warning":
@@ -888,7 +1271,7 @@ def build_insights(
             insights.append(
                 {
                     "level": "warn",
-                    "title": f"{b['label']} 消耗偏快{ratio_txt}",
+                    "title": f"{b['label']} 已用 {b['used_pct']:.1f}%{ratio_txt}",
                     "detail": f"剩 {b['remaining_pct']:.1f}%，按当前速率重置前预计剩 {b.get('projected_rem_at_reset', 0):.1f}%。",
                 }
             )
@@ -931,7 +1314,9 @@ def build_insights(
 
 def build_analytics(window: str = "7d") -> Dict[str, Any]:
     now = datetime.now(timezone.utc)
-    now_cst = now.astimezone(CST)
+    local_tz = get_local_tz()
+    tz_label = get_tz_label()
+    now_cst = now.astimezone(local_tz)
 
     settings = load_agy_settings()
     conv_meta = load_conversation_metadata()
@@ -1014,7 +1399,7 @@ def build_analytics(window: str = "7d") -> Dict[str, Any]:
             "other": 0,
         }
     for e in ev_5h:
-        dt_c = e["ts"].astimezone(CST)
+        dt_c = e["ts"].astimezone(local_tz)
         k = dt_c.replace(minute=(dt_c.minute // 10) * 10, second=0, microsecond=0).strftime("%Y-%m-%d %H:%M")
         if k in rolling_5h_map:
             b = rolling_5h_map[k]
@@ -1097,7 +1482,7 @@ def build_analytics(window: str = "7d") -> Dict[str, Any]:
     for e in events:
         if e["ts"] < start_24h - timedelta(hours=1):
             continue
-        k = e["ts"].astimezone(CST).strftime("%Y-%m-%d %H:00")
+        k = e["ts"].astimezone(local_tz).strftime("%Y-%m-%d %H:00")
         if k in hourly_buckets:
             b = hourly_buckets[k]
             b["calls"] += 1
@@ -1143,7 +1528,7 @@ def build_analytics(window: str = "7d") -> Dict[str, Any]:
         ]
 
     for e in events:
-        dt_c = e["ts"].astimezone(CST)
+        dt_c = e["ts"].astimezone(local_tz)
         k = dt_c.strftime("%Y-%m-%d")
         if k in daily_buckets:
             b = daily_buckets[k]
@@ -1224,6 +1609,8 @@ def build_analytics(window: str = "7d") -> Dict[str, Any]:
         )
 
     quota_info = analyze_quota_buckets(live_state, snapshots, events, now)
+    notifications_info = evaluate_quota_notifications(quota_info, now=now, dispatch=True)
+    week_over_week = compute_week_over_week(events, now=now, tz=local_tz)
     insights = build_insights(quota_info, windows_summary, by_pool, burn_5h, selected_summary)
 
     sl_cfg = settings.get("statusLine") if isinstance(settings.get("statusLine"), dict) else {}
@@ -1253,11 +1640,14 @@ def build_analytics(window: str = "7d") -> Dict[str, Any]:
 
     return {
         "generated_at": now.isoformat(),
-        "generated_at_cst": fmt_cst(now, "%Y-%m-%d %H:%M:%S CST"),
+        "generated_at_cst": f"{fmt_cst(now, '%Y-%m-%d %H:%M:%S')} {tz_label}",
+        "timezone_label": tz_label,
         "window": window,
         "selected_summary": selected_summary,
         "live_session": live_session,
         "quota": quota_info,
+        "notifications": notifications_info,
+        "week_over_week": week_over_week,
         "insights": insights,
         "windows": windows_summary,
         "burn_5h": burn_5h,
@@ -1475,51 +1865,55 @@ def _quota_sig(q: Any) -> str:
     return json.dumps(slim, sort_keys=True)
 
 
-def _compact_quota_snapshots_unlocked(keep_days: int = 30) -> Dict[str, int]:
-    if not SNAPSHOTS_FILE.exists():
+def _compact_quota_snapshots_unlocked(keep_days: int = 30, keep_archive_days: int = 365) -> Dict[str, int]:
+    if not SNAPSHOTS_FILE.exists() and not DAILY_ARCHIVE_FILE.exists():
         return {"before_lines": 0, "after_lines": 0, "archived_days": 0, "bytes_before": 0, "bytes_after": 0}
 
-    bytes_before = SNAPSHOTS_FILE.stat().st_size
-    cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, keep_days))
+    bytes_before = SNAPSHOTS_FILE.stat().st_size if SNAPSHOTS_FILE.exists() else 0
+    now_utc = datetime.now(timezone.utc)
+    local_tz = get_local_tz()
+    cutoff = now_utc - timedelta(days=max(1, keep_days))
+    archive_cutoff_day = (now_utc - timedelta(days=max(keep_days + 1, keep_archive_days))).astimezone(local_tz).strftime("%Y-%m-%d")
 
     kept_raw: List[Dict[str, Any]] = []
     old_by_day: Dict[str, Dict[str, Dict[str, Any]]] = defaultdict(dict)
     before_lines = 0
 
-    with SNAPSHOTS_FILE.open("r", encoding="utf-8", errors="replace") as fh:
-        for line in fh:
-            if not line.strip():
-                continue
-            before_lines += 1
-            try:
-                d = json.loads(line)
-            except Exception:
-                continue
-            if not isinstance(d, dict):
-                continue
-            dt = parse_iso_dt(d.get("captured_at"))
-            if dt is None:
-                continue
-            if dt < cutoff:
-                day_key = dt.astimezone(CST).strftime("%Y-%m-%d")
-                q_map = d.get("quota")
-                if not isinstance(q_map, dict):
+    if SNAPSHOTS_FILE.exists():
+        with SNAPSHOTS_FILE.open("r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if not line.strip():
                     continue
-                for bid, bval in q_map.items():
-                    if not isinstance(bval, dict):
+                before_lines += 1
+                try:
+                    d = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(d, dict):
+                    continue
+                dt = parse_iso_dt(d.get("captured_at"))
+                if dt is None:
+                    continue
+                if dt < cutoff:
+                    day_key = dt.astimezone(local_tz).strftime("%Y-%m-%d")
+                    q_map = d.get("quota")
+                    if not isinstance(q_map, dict):
                         continue
-                    rf = extract_remaining_fraction(bval)
-                    if rf is None:
-                        continue
-                    cur = old_by_day[day_key].get(bid)
-                    if cur is None:
-                        old_by_day[day_key][bid] = {"min_rem": rf, "last_rem": rf, "samples": 1}
-                    else:
-                        cur["min_rem"] = min(cur["min_rem"], rf)
-                        cur["last_rem"] = rf
-                        cur["samples"] += 1
-            else:
-                kept_raw.append(d)
+                    for bid, bval in q_map.items():
+                        if not isinstance(bval, dict):
+                            continue
+                        rf = extract_remaining_fraction(bval)
+                        if rf is None:
+                            continue
+                        cur = old_by_day[day_key].get(bid)
+                        if cur is None:
+                            old_by_day[day_key][bid] = {"min_rem": rf, "last_rem": rf, "samples": 1}
+                        else:
+                            cur["min_rem"] = min(cur["min_rem"], rf)
+                            cur["last_rem"] = rf
+                            cur["samples"] += 1
+                else:
+                    kept_raw.append(d)
 
     compacted: List[Dict[str, Any]] = []
     sigs = [_quota_sig(x.get("quota")) for x in kept_raw]
@@ -1528,8 +1922,9 @@ def _compact_quota_snapshots_unlocked(keep_days: int = 30) -> Dict[str, int]:
             compacted.append(item)
 
     archived_days = 0
-    if old_by_day:
+    if old_by_day or DAILY_ARCHIVE_FILE.exists():
         existing_arch: Dict[str, Any] = {}
+        had_corrupt_or_expired = False
         if DAILY_ARCHIVE_FILE.exists():
             for line in DAILY_ARCHIVE_FILE.read_text(encoding="utf-8", errors="replace").splitlines():
                 if not line.strip():
@@ -1537,10 +1932,17 @@ def _compact_quota_snapshots_unlocked(keep_days: int = 30) -> Dict[str, int]:
                 try:
                     row = json.loads(line)
                     if isinstance(row, dict) and isinstance(row.get("date"), str):
-                        existing_arch[row["date"]] = row
+                        if row["date"] >= archive_cutoff_day:
+                            existing_arch[row["date"]] = row
+                        else:
+                            had_corrupt_or_expired = True
+                    else:
+                        had_corrupt_or_expired = True
                 except Exception:
-                    continue
+                    had_corrupt_or_expired = True
         for day_key, buckets_summary in sorted(old_by_day.items()):
+            if day_key < archive_cutoff_day:
+                continue
             prev = existing_arch.get(day_key)
             prev_buckets = prev.get("buckets") if isinstance(prev, dict) and isinstance(prev.get("buckets"), dict) else {}
             merged_buckets = dict(prev_buckets)
@@ -1556,12 +1958,15 @@ def _compact_quota_snapshots_unlocked(keep_days: int = 30) -> Dict[str, int]:
                     merged_buckets[bid] = b_stat
             existing_arch[day_key] = {"date": day_key, "buckets": merged_buckets}
             archived_days += 1
-        arch_text = "".join(json.dumps(existing_arch[k], ensure_ascii=False) + "\n" for k in sorted(existing_arch.keys()))
-        atomic_write_text(DAILY_ARCHIVE_FILE, arch_text)
+        if archived_days > 0 or had_corrupt_or_expired:
+            arch_text = "".join(json.dumps(existing_arch[k], ensure_ascii=False) + "\n" for k in sorted(existing_arch.keys()))
+            atomic_write_text(DAILY_ARCHIVE_FILE, arch_text)
 
-    snap_text = "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in compacted)
-    atomic_write_text(SNAPSHOTS_FILE, snap_text)
-    bytes_after = SNAPSHOTS_FILE.stat().st_size
+    bytes_after = 0
+    if SNAPSHOTS_FILE.exists() or compacted:
+        snap_text = "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in compacted)
+        atomic_write_text(SNAPSHOTS_FILE, snap_text)
+        bytes_after = SNAPSHOTS_FILE.stat().st_size
 
     return {
         "before_lines": before_lines,
@@ -1580,19 +1985,29 @@ def compact_quota_snapshots(keep_days: int = 30) -> Dict[str, int]:
 
 
 def rotate_web_log(max_bytes: int = 2 * 1024 * 1024, keep_bytes: int = 512 * 1024) -> int:
+    """In-place log rotation preserving the existing inode so active O_APPEND daemon fds never detach."""
     if not WEB_LOG_FILE.exists():
         return 0
     try:
-        sz = WEB_LOG_FILE.stat().st_size
-        if sz <= max_bytes:
-            return 0
-        with WEB_LOG_FILE.open("rb") as fh:
-            fh.seek(max(0, sz - keep_bytes))
-            tail = fh.read()
-        tmp = WEB_LOG_FILE.with_suffix(".log.tmp")
-        tmp.write_bytes(tail)
-        os.replace(tmp, WEB_LOG_FILE)
-        return sz - len(tail)
+        with file_lock(WEB_LOG_FILE.with_name(".weblog.lock"), timeout=1.0):
+            sz = WEB_LOG_FILE.stat().st_size
+            if sz <= max_bytes:
+                return 0
+            with WEB_LOG_FILE.open("r+b") as fh:
+                fh.seek(max(0, sz - keep_bytes))
+                tail = fh.read()
+                nl = tail.find(b"\n")
+                if 0 <= nl < len(tail) - 1:
+                    tail = tail[nl + 1 :]
+                fh.seek(0)
+                fh.write(tail)
+                fh.truncate()
+                fh.flush()
+                try:
+                    os.fsync(fh.fileno())
+                except OSError:
+                    pass
+            return max(0, sz - len(tail))
     except Exception:
         return 0
 
@@ -1638,13 +2053,17 @@ def clean_cache(keep_days: int = 30, reset_index: bool = False, max_backups: int
             _MEM_TRANSCRIPT_CACHE.clear()
             _DISK_INDEX_LOADED = False
         TRANSCRIPT_INDEX_FILE.unlink(missing_ok=True)
+        if CONV_CACHE_DIR.exists():
+            for shard in CONV_CACHE_DIR.glob("*.json"):
+                shard.unlink(missing_ok=True)
     load_transcript_events()
 
     backups_removed = 0
     backups_freed = 0
-    if SETTINGS_FILE.parent.exists():
+    sf = discover_settings_file()
+    if sf.parent.exists():
         baks = sorted(
-            SETTINGS_FILE.parent.glob("settings.json.bak-agy-usage-*"),
+            sf.parent.glob("settings.json.bak-agy-usage-*"),
             key=lambda p: p.stat().st_mtime if p.exists() else 0,
             reverse=True,
         )
@@ -1670,14 +2089,105 @@ def clean_cache(keep_days: int = 30, reset_index: bool = False, max_backups: int
     }
 
 
-def run_doctor(stale_days: int = 30, prune_stale: bool = False) -> Dict[str, Any]:
-    """Inspect Antigravity & agy-usage storage health read-only; optionally prune stale sessions via official LS API."""
+def _count_corrupt_jsonl(path: Path) -> int:
+    if not path.exists():
+        return 0
+    bad = 0
+    try:
+        for ln in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not ln.strip():
+                continue
+            try:
+                v = json.loads(ln)
+                if not isinstance(v, dict):
+                    bad += 1
+            except Exception:
+                bad += 1
+    except Exception:
+        pass
+    return bad
+
+
+def run_doctor(stale_days: int = 30, prune_stale: bool = False, fix_issues: bool = False) -> Dict[str, Any]:
+    """Inspect Antigravity & agy-usage health first (read-only); optionally repair own pipeline (`--fix`) or prune stale via LS API."""
+    import sys as _sys
     import urllib.request
 
     now = datetime.now(timezone.utc)
     stale_cutoff = now - timedelta(days=max(1, stale_days))
     orphan_cutoff = now - timedelta(days=1)
 
+    # 1. Inspect own telemetry pipeline & cache health BEFORE modifying anything
+    sf = discover_settings_file()
+    settings = load_agy_settings()
+    sl_cfg = settings.get("statusLine") if isinstance(settings.get("statusLine"), dict) else {}
+    sl_cmd = str(sl_cfg.get("command") or "").strip()
+    expected_sl = str(APP_DIR / "statusline.py")
+    sl_enabled = bool(sl_cfg) and (sl_cfg.get("enabled", True) is not False) and ("statusline.py" in sl_cmd)
+    sl_target_exists = Path(expected_sl).exists() and (expected_sl in sl_cmd if sl_cmd else False)
+    sl_executable = os.access(expected_sl, os.X_OK) if os.name != "nt" else Path(expected_sl).exists()
+
+    corrupt_snapshots = _count_corrupt_jsonl(SNAPSHOTS_FILE)
+    corrupt_archive = _count_corrupt_jsonl(DAILY_ARCHIVE_FILE)
+    tmp_set = set()
+    if DATA_DIR.exists():
+        tmp_set.update(DATA_DIR.glob("*.tmp"))
+        tmp_set.update(DATA_DIR.glob(".*.tmp"))
+    if CONV_CACHE_DIR.exists():
+        tmp_set.update(CONV_CACHE_DIR.glob("*.tmp"))
+        tmp_set.update(CONV_CACHE_DIR.glob(".*.tmp"))
+    orphan_tmps = sorted(tmp_set)
+
+    ls_state = load_live_state()
+    ls_age_sec: Optional[int] = None
+    if ls_state and ls_state.get("captured_at"):
+        cdt = parse_iso_dt(ls_state.get("captured_at"))
+        if cdt is not None:
+            ls_age_sec = max(0, int((now - cdt).total_seconds()))
+
+    fixed_actions: List[str] = []
+    if fix_issues:
+        ensure_data_dir()
+        if os.name != "nt":
+            for script_p in (APP_DIR / "statusline.py", APP_DIR / "cli.py", APP_DIR / "core.py"):
+                if script_p.exists() and not os.access(script_p, os.X_OK):
+                    os.chmod(script_p, 0o755)
+                    fixed_actions.append(f"恢复脚本可执行权限: {script_p.name}")
+            sl_executable = os.access(expected_sl, os.X_OK)
+
+        if not (sl_enabled and sl_target_exists):
+            sf.parent.mkdir(parents=True, exist_ok=True)
+            cfg_obj = dict(settings) if isinstance(settings, dict) else {}
+            cmd_val = f'"{_sys.executable}" "{expected_sl}"' if os.name == "nt" else expected_sl
+            cfg_obj["statusLine"] = {
+                "type": "command",
+                "command": cmd_val,
+                "enabled": True,
+                "stack_with_default": True,
+            }
+            atomic_write_text(sf, json.dumps(cfg_obj, ensure_ascii=False, indent=2) + "\n", mode=0o600)
+            sl_enabled = True
+            sl_target_exists = True
+            fixed_actions.append(f"修复并启用 statusLine 配置 ({sf})")
+
+        removed_tmp = 0
+        for tf in orphan_tmps:
+            try:
+                tf.unlink(missing_ok=True)
+                removed_tmp += 1
+            except OSError:
+                pass
+        if removed_tmp:
+            fixed_actions.append(f"清理遗留临时文件 {removed_tmp} 个")
+            orphan_tmps = []
+
+        if corrupt_snapshots > 0 or corrupt_archive > 0:
+            compact_quota_snapshots(keep_days=30)
+            fixed_actions.append(f"隔离并重写损坏快照/归档行 ({corrupt_snapshots + corrupt_archive} 行)")
+            corrupt_snapshots = _count_corrupt_jsonl(SNAPSHOTS_FILE)
+            corrupt_archive = _count_corrupt_jsonl(DAILY_ARCHIVE_FILE)
+
+    load_transcript_events()
     meta = load_conversation_metadata()
     agy_dirs = _discover_agy_dirs()
 
@@ -1777,12 +2287,25 @@ def run_doctor(stale_days: int = 30, prune_stale: bool = False) -> Dict[str, Any
                     delete_errors.append(f"{tid[:8]}: {exc}")
 
     own_cache_bytes = _dir_size(DATA_DIR)
+    with _CACHE_LOCK:
+        cached_cnt = len(_MEM_TRANSCRIPT_CACHE)
     return {
         "agy_dirs": [str(p) for p in agy_dirs],
+        "settings_file": str(sf),
+        "pipeline": {
+            "statusline_enabled": sl_enabled,
+            "statusline_path_valid": sl_target_exists,
+            "statusline_executable": sl_executable,
+            "live_state_age_seconds": ls_age_sec,
+            "corrupt_snapshot_lines": corrupt_snapshots,
+            "corrupt_archive_lines": corrupt_archive,
+            "orphan_tmp_count": len(orphan_tmps),
+        },
+        "fixed_actions": fixed_actions,
         "total_agy_bytes": total_agy_bytes,
         "own_cache_dir": str(DATA_DIR),
         "own_cache_bytes": own_cache_bytes,
-        "index_cached_files": len(_MEM_TRANSCRIPT_CACHE),
+        "index_cached_files": cached_cnt,
         "total_conversations": len(meta),
         "empty_db_entries": empty_db_entries,
         "orphan_brain_dirs": orphan_brain_dirs,
@@ -1802,21 +2325,22 @@ def save_manual_quota(bucket: str, remaining_pct: float, reset_str: Optional[str
     reset_in_sec: Optional[int] = None
 
     if reset_str and reset_str.strip():
-        now_cst = datetime.now(CST)
+        local_tz = get_local_tz()
+        now_local = datetime.now(local_tz)
         raw = reset_str.strip()
-        dt_cst: Optional[datetime] = None
+        dt_local: Optional[datetime] = None
         for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%m-%d %H:%M", "%Y-%m-%dT%H:%M"):
             try:
                 parsed = datetime.strptime(raw, fmt)
                 if fmt == "%m-%d %H:%M":
-                    parsed = parsed.replace(year=now_cst.year)
-                dt_cst = parsed.replace(tzinfo=CST)
+                    parsed = parsed.replace(year=now_local.year)
+                dt_local = parsed.replace(tzinfo=local_tz)
                 break
             except ValueError:
                 continue
-        if dt_cst is None:
+        if dt_local is None:
             raise ValueError(f"无法解析重置时间: {raw}（格式如 2026-12-02 08:00 或 12-02 08:00）")
-        dt_utc = dt_cst.astimezone(timezone.utc)
+        dt_utc = dt_local.astimezone(timezone.utc)
         reset_iso = dt_utc.isoformat()
         reset_in_sec = max(0, int((dt_utc - datetime.now(timezone.utc)).total_seconds()))
 

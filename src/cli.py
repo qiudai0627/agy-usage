@@ -24,16 +24,19 @@ if str(APP_DIR) not in sys.path:
 
 from core import (  # noqa: E402
     DATA_DIR,
-    SETTINGS_FILE,
+    atomic_write_text,
     build_analytics,
     clean_cache,
+    discover_settings_file,
     ensure_data_dir,
     export_sessions_csv,
     fmt_tokens,
     get_conversation_detail,
+    get_preferences,
     rotate_web_log,
     run_doctor,
     save_manual_quota,
+    set_preferences,
 )
 from web_ui import DASHBOARD_HTML  # noqa: E402
 
@@ -203,9 +206,10 @@ def render_terminal_report(data: Dict[str, Any], compact: bool = False) -> str:
     lines.append(
         f"  {DIM}{'窗口':<10} {'调用':>6} {'新增输入':>10} {'缓存命中':>10} {'输出':>9} {'有效合计':>10} {'缓存率':>7} {'估算费用':>9}{RESET}"
     )
+    tz_lbl = data.get("timezone_label") or "UTC+8"
     rows = [
         ("近 5 小时", wins["5h"]),
-        ("今日(CST)", wins["today"]),
+        (f"今日({tz_lbl})", wins["today"]),
         ("近 24 小时", wins["24h"]),
         ("本周(周一起)", wins["calendar_week"]),
         ("近 7 天", wins["7d"]),
@@ -218,6 +222,19 @@ def render_terminal_report(data: Dict[str, Any], compact: bool = False) -> str:
             f"{BOLD}{fmt_tokens(s['billable_tokens']):>10}{RESET} {GREEN}{s['cache_hit_pct']:>6.1f}%{RESET} "
             f"{YELLOW}{fmt_usd(s['est_cost_usd']):>9}{RESET}"
         )
+    wow = data.get("week_over_week") or {}
+    if wow:
+        if wow.get("comparable"):
+            dp = float(wow.get("delta_pct") or 0.0)
+            wc = GREEN if dp <= 0 else YELLOW
+            prev_t = fmt_tokens((wow.get("previous") or {}).get("billable_tokens") or 0)
+            cur_t = fmt_tokens((wow.get("current") or {}).get("billable_tokens") or 0)
+            lines.append(
+                f"  {DIM}自然周同进度环比 ({wow.get('elapsed_hours', 0)}h): {RESET}"
+                f"{wc}{BOLD}{wow.get('badge_text')}{RESET} {DIM}(本周 {cur_t} vs 上周同期 {prev_t}){RESET}"
+            )
+        else:
+            lines.append(f"  {DIM}自然周同进度环比: {wow.get('badge_text')}（{wow.get('reason', '')}）{RESET}")
     lines.append(
         f"  {DIM}近 5h 实时燃速: {b5['calls_per_hour']} 次/h · {fmt_tokens(b5['billable_tokens_per_hour'])} 有效tok/h · 估算 {fmt_usd(b5['est_cost_per_hour'])}/h{RESET}"
     )
@@ -252,7 +269,7 @@ def render_terminal_report(data: Dict[str, Any], compact: bool = False) -> str:
     h_vals = [h["billable_tokens"] for h in data["hourly_24h"]]
     peak_h = max(data["hourly_24h"], key=lambda x: x["billable_tokens"]) if data["hourly_24h"] else None
     peak_txt = f"峰值 {peak_h['label']} ({fmt_tokens(peak_h['billable_tokens'])}, {peak_h['calls']}次)" if peak_h and peak_h["billable_tokens"] > 0 else "无活跃"
-    lines.append(f"{BOLD}【4. 5h 燃速 / 24h 曲线 & 7日每日趋势 (CST)】{RESET}")
+    lines.append(f"{BOLD}【4. 5h 燃速 / 24h 曲线 & 7日每日趋势 ({tz_lbl})】{RESET}")
     lines.append(f"  5h 燃速(10m) : {MAGENTA}{sparkline(s5_vals)}{RESET}  {DIM}({data['rolling_5h_10m'][0]['label']} → {data['rolling_5h_10m'][-1]['label']}){RESET}")
     lines.append(f"  24h Token曲线: {CYAN}{sparkline(h_vals)}{RESET}  {DIM}({data['hourly_24h'][0]['label']} → {data['hourly_24h'][-1]['label']} · {peak_txt}){RESET}")
 
@@ -337,6 +354,10 @@ def make_handler(port: int) -> type:
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("X-Frame-Options", "DENY")
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:",
+            )
             self.send_header("Content-Length", str(len(body)))
             if extra_headers:
                 for k, v in extra_headers.items():
@@ -391,6 +412,11 @@ def make_handler(port: int) -> type:
                 self._send(200, "application/json; charset=utf-8", body)
                 return
 
+            if path == "/api/preferences":
+                body = json.dumps({"ok": True, "preferences": get_preferences()}, ensure_ascii=False).encode("utf-8")
+                self._send(200, "application/json; charset=utf-8", body)
+                return
+
             if path == "/api/export.csv":
                 win = (qs.get("window") or ["7d"])[0]
                 csv_text = export_sessions_csv(window=win)
@@ -409,7 +435,7 @@ def make_handler(port: int) -> type:
             if not self._check_host_and_origin(is_write=True):
                 return
             parsed = urlparse(self.path)
-            if parsed.path == "/api/record-quota":
+            if parsed.path in ("/api/record-quota", "/api/preferences"):
                 try:
                     raw_len = self.headers.get("Content-Length")
                     if raw_len is None:
@@ -423,6 +449,15 @@ def make_handler(port: int) -> type:
                     payload = json.loads(raw)
                     if not isinstance(payload, dict):
                         raise ValueError("JSON object required")
+                    if parsed.path == "/api/preferences":
+                        en = payload.get("notifications_enabled")
+                        prefs = set_preferences(notifications_enabled=bool(en) if en is not None else None)
+                        self._send(
+                            200,
+                            "application/json; charset=utf-8",
+                            json.dumps({"ok": True, "preferences": prefs}, ensure_ascii=False).encode("utf-8"),
+                        )
+                        return
                     res = save_manual_quota(
                         bucket=str(payload.get("bucket") or "gemini-weekly"),
                         remaining_pct=float(payload.get("remaining_pct")),
@@ -556,6 +591,7 @@ def cmd_daemon(args: argparse.Namespace) -> int:
             [py_exe, str(APP_DIR / "cli.py"), "web", "--port", str(port), "--no-open"],
             **popen_kwargs,
         )
+        log_fh.close()
         PID_FILE.write_text(str(proc.pid), encoding="utf-8")
         time.sleep(0.5)
         if proc.poll() is not None:
@@ -576,14 +612,20 @@ def cmd_daemon(args: argparse.Namespace) -> int:
 def cmd_install_statusline(args: argparse.Namespace) -> int:
     statusline_path = str(APP_DIR / "statusline.py")
     cmd_str = f'"{sys.executable}" "{statusline_path}"' if os.name == "nt" else statusline_path
-    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    sf = discover_settings_file()
+    sf.parent.mkdir(parents=True, exist_ok=True)
     cfg: Dict[str, Any] = {}
-    if SETTINGS_FILE.exists():
+    if sf.exists():
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-        backup = SETTINGS_FILE.with_name(f"settings.json.bak-agy-usage-{ts}")
-        shutil.copy2(SETTINGS_FILE, backup)
+        backup = sf.with_name(f"settings.json.bak-agy-usage-{ts}")
+        shutil.copy2(sf, backup)
         print(f"已备份原配置: {backup}")
-        cfg = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+        try:
+            loaded = json.loads(sf.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                cfg = loaded
+        except Exception:
+            cfg = {}
 
     cfg["statusLine"] = {
         "type": "command",
@@ -591,12 +633,8 @@ def cmd_install_statusline(args: argparse.Namespace) -> int:
         "enabled": True,
         "stack_with_default": bool(args.stack),
     }
-    tmp = SETTINGS_FILE.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    if os.name != "nt":
-        os.chmod(tmp, 0o600)
-    os.replace(tmp, SETTINGS_FILE)
-    print(f"{GREEN}✓ 已在 {SETTINGS_FILE} 启用 statusLine:{RESET}")
+    atomic_write_text(sf, json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", mode=0o600)
+    print(f"{GREEN}✓ 已在 {sf} 启用 statusLine:{RESET}")
     print(f"  command: {cmd_str}")
     print(f"  stack_with_default: {bool(args.stack)}")
     print(f"提示：新开的 agy 会话会自动生效；当前已打开的 agy 会话可输入 {CYAN}/statusline {cmd_str}{RESET} 立即刷新。")
@@ -604,22 +642,19 @@ def cmd_install_statusline(args: argparse.Namespace) -> int:
 
 
 def cmd_uninstall_statusline(_args: argparse.Namespace) -> int:
-    if not SETTINGS_FILE.exists():
+    sf = discover_settings_file()
+    if not sf.exists():
         print("未找到 settings.json")
         return 0
-    cfg = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+    cfg = json.loads(sf.read_text(encoding="utf-8"))
     if "statusLine" not in cfg:
         print("settings.json 中未配置 statusLine")
         return 0
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    backup = SETTINGS_FILE.with_name(f"settings.json.bak-agy-usage-{ts}")
-    shutil.copy2(SETTINGS_FILE, backup)
+    backup = sf.with_name(f"settings.json.bak-agy-usage-{ts}")
+    shutil.copy2(sf, backup)
     del cfg["statusLine"]
-    tmp = SETTINGS_FILE.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    if os.name != "nt":
-        os.chmod(tmp, 0o600)
-    os.replace(tmp, SETTINGS_FILE)
+    atomic_write_text(sf, json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", mode=0o600)
     print(f"{GREEN}✓ 已移除 statusLine 配置{RESET}（原配置备份于 {backup}）")
     return 0
 
@@ -657,14 +692,28 @@ def cmd_clean(args: argparse.Namespace) -> int:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
-    # First clean our own cache automatically
-    c_res = clean_cache(keep_days=30)
-    rep = run_doctor(stale_days=int(args.stale_days), prune_stale=bool(args.prune_stale))
+    # Inspect read-only FIRST before modifying or cleaning anything ("doctor 先展示再清")
+    rep = run_doctor(stale_days=int(args.stale_days), prune_stale=False, fix_issues=False)
+    pipe = rep.get("pipeline") or {}
+    daemon_pid = _read_pid()
 
-    print(f"{BOLD}{CYAN}━━━ Antigravity & agy-usage 数据健康体检 ━━━{RESET}")
+    print(f"{BOLD}{CYAN}━━━ Antigravity & agy-usage 数据与链路健康体检 ━━━{RESET}")
     print(f"  监控自有缓存: {_fmt_bytes(rep['own_cache_bytes'])} ({rep['own_cache_dir']})")
-    print(f"  增量缓存命中: 已索引 {rep['index_cached_files']} 个 transcript（每 3s 刷新仅增量读取变动文件）")
+    print(f"  分会话索引  : 已缓存 {rep['index_cached_files']} 个会话分片（单会话更新仅重写对应小分片）")
     print(f"  AGY 数据总占: {BOLD}{_fmt_bytes(rep['total_agy_bytes'])}{RESET}（共登记 {rep['total_conversations']} 个会话）")
+
+    sl_ok = pipe.get("statusline_enabled") and pipe.get("statusline_path_valid") and pipe.get("statusline_executable")
+    age_s = pipe.get("live_state_age_seconds")
+    age_txt = f"{age_s}秒前" if age_s is not None else "尚未生成 live_state.json"
+    bad_lines = int(pipe.get("corrupt_snapshot_lines") or 0) + int(pipe.get("corrupt_archive_lines") or 0)
+    tmp_cnt = int(pipe.get("orphan_tmp_count") or 0)
+
+    print("")
+    print(f"{BOLD}【实时采集链路诊断】{RESET}")
+    print(f"  • 状态栏配置 : {f'{GREEN}✓ 正常{RESET}' if sl_ok else f'{YELLOW}⚠ 待修复{RESET}'} ({rep.get('settings_file')})")
+    print(f"  • 后台监控台 : {f'{GREEN}● 运行中 (PID {daemon_pid}){RESET}' if daemon_pid else f'{YELLOW}○ 未运行{RESET}'}")
+    print(f"  • 最近采集   : {age_txt}")
+    print(f"  • 缓存完整性 : 损坏行 {bad_lines} 条 · 遗留临时文件 {tmp_cnt} 个")
 
     empty_cnt = len(rep["empty_db_entries"])
     orphan_cnt = len(rep["orphan_brain_dirs"])
@@ -672,7 +721,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     stale_bytes = sum(x["bytes"] for x in rep["stale_sessions"])
 
     print("")
-    print(f"{BOLD}【扫描明细（安全只读模式，不直接篡改 AGY SQLite 库）】{RESET}")
+    print(f"{BOLD}【存储扫描明细（安全只读模式，不直接篡改 AGY SQLite 库）】{RESET}")
     print(f"  • 空壳/零步数记录 : {empty_cnt} 条")
     print(f"  • 孤儿 brain 目录 : {orphan_cnt} 个")
     print(f"  • 超过 {rep['stale_days']} 天陈旧会话: {stale_cnt} 个（共占 {_fmt_bytes(stale_bytes)}）")
@@ -685,11 +734,26 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                 f"{s['age_days']:>3}天前 ({s['last_cst']})  {trunc_display(s['title'], 32)}"
             )
 
-    if args.prune_stale:
+    if getattr(args, "fix", False):
         print("")
-        if rep["deleted_ids"]:
-            print(f"  {GREEN}✓ 已通过官方 ConversationService 安全清理 {len(rep['deleted_ids'])} 个失效/陈旧会话{RESET}")
-        elif not rep["ls_api_available"]:
+        fix_rep = run_doctor(stale_days=int(args.stale_days), prune_stale=False, fix_issues=True)
+        c_res = clean_cache(keep_days=30)
+        for act in fix_rep.get("fixed_actions") or []:
+            print(f"  {GREEN}✓ 已修复: {act}{RESET}")
+        if c_res["bytes_freed"] > 0:
+            print(f"  {GREEN}✓ 已压缩自有缓存，释放 {_fmt_bytes(c_res['bytes_freed'])}{RESET}")
+        if not daemon_pid:
+            ns = argparse.Namespace(action="start", port=18420, no_open=True)
+            cmd_daemon(ns)
+    elif not sl_ok or bad_lines > 0 or tmp_cnt > 0:
+        print(f"\n  {YELLOW}提示：发现可自动修复的本地配置或临时文件问题，可运行: agy-usage doctor --fix{RESET}")
+
+    if args.prune_stale:
+        p_rep = run_doctor(stale_days=int(args.stale_days), prune_stale=True, fix_issues=False)
+        print("")
+        if p_rep["deleted_ids"]:
+            print(f"  {GREEN}✓ 已通过官方 ConversationService 安全清理 {len(p_rep['deleted_ids'])} 个失效/陈旧会话{RESET}")
+        elif not p_rep["ls_api_available"]:
             print(
                 f"  {YELLOW}提示：当前不在 agy 内部会话环境中（未检测到 ANTIGRAVITY_LS_ADDRESS）。{RESET}\n"
                 f"  {DIM}为保护 conversation_summaries.db WAL 锁安全，外部终端不直接硬删 SQLite；可在 agy 会话内运行 `agy-usage doctor --prune-stale` 或用 `/delete` 安全清理老会话。{RESET}"
@@ -699,8 +763,22 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     elif stale_cnt > 0 or empty_cnt > 0:
         print(f"\n  {DIM}如需在 agy 内通过官方接口安全清理上述空壳与超期会话，可运行: agy-usage doctor --stale-days {rep['stale_days']} --prune-stale{RESET}")
 
-    if c_res["bytes_freed"] > 0:
-        print(f"  {GREEN}✓ 已顺手自动压缩自有快照缓存，释放 {_fmt_bytes(c_res['bytes_freed'])}{RESET}")
+    return 0
+
+
+def cmd_notify(args: argparse.Namespace) -> int:
+    act = args.action
+    if act == "on":
+        prefs = set_preferences(notifications_enabled=True)
+        print(f"{GREEN}✓ 已开启额度告警 (80%/95%) 与回血桌面通知{RESET}")
+        return 0
+    if act == "off":
+        prefs = set_preferences(notifications_enabled=False)
+        print(f"{DIM}○ 已关闭桌面通知提醒{RESET}")
+        return 0
+    prefs = get_preferences()
+    st = f"{GREEN}开启{RESET}" if prefs.get("notifications_enabled") else f"{DIM}关闭（默认）{RESET}"
+    print(f"桌面通知状态: {st}（可用 `agy-usage notify on` 或 `off` 切换）")
     return 0
 
 
@@ -749,23 +827,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_json.add_argument("-w", "--window", choices=["5h", "today", "24h", "week", "7d", "all"], default="7d")
 
     p_inst = sub.add_parser("install-statusline", help="将实时状态栏与限额采集器写入 agy settings.json")
-    p_inst.add_argument("--stack", action="store_true", help="叠加在默认状态栏下方而非替换")
+    p_inst.add_argument("--stack", dest="stack", action="store_true", default=True, help="叠加在默认状态栏下方（默认开启）")
+    p_inst.add_argument("--standalone", dest="stack", action="store_false", help="替换默认状态栏并显示模型名")
 
     sub.add_parser("uninstall-statusline", help="从 agy settings.json 移除 statusLine 配置")
 
     p_rec = sub.add_parser("record-quota", help="手动录入一次 /usage 看到的限额快照")
     p_rec.add_argument("bucket", help="限额桶名，如 gemini-weekly / gemini-5h / claude-weekly")
     p_rec.add_argument("remaining_pct", type=float, help="剩余百分比（0~100）")
-    p_rec.add_argument("--reset", help="重置时间（CST），如 '2026-12-02 08:00' 或 '12-02 08:00'")
+    p_rec.add_argument("--reset", help="重置时间（本地时区），如 '2026-12-02 08:00' 或 '12-02 08:00'")
 
     p_clean = sub.add_parser("clean", help="压缩去重快照、轮转日志并清理孤儿缓存索引")
     p_clean.add_argument("--keep-days", type=int, default=30, help="保留高频快照天数，超期自动按日归档（默认 30）")
     p_clean.add_argument("--reset-index", action="store_true", help="清空并重建 transcript 增量索引缓存")
     p_clean.add_argument("--max-backups", type=int, default=3, help="最多保留几份 settings.json 备份（默认 3）")
 
-    p_doc = sub.add_parser("doctor", help="体检存储占用、陈旧会话与空壳记录（支持官方接口安全清理）")
+    p_doc = sub.add_parser("doctor", help="先只读诊断链路与存储健康，可选 --fix 一键自修复或官方接口清理")
     p_doc.add_argument("--stale-days", type=int, default=30, help="超过多少天未活跃视为陈旧会话（默认 30）")
+    p_doc.add_argument("--fix", action="store_true", help="自动修复 statusLine 配置、可执行权限、损坏行与孤儿临时文件")
     p_doc.add_argument("--prune-stale", action="store_true", help="通过官方 ConversationService 接口安全删除空壳与超期会话")
+
+    p_not = sub.add_parser("notify", help="管理 80%/95% 额度告警与回血恢复桌面通知（默认关闭）")
+    p_not.add_argument("action", nargs="?", choices=["on", "off", "status"], default="status")
 
     return p
 
@@ -795,6 +878,8 @@ def main() -> int:
         return cmd_clean(args)
     if args.cmd == "doctor":
         return cmd_doctor(args)
+    if args.cmd == "notify":
+        return cmd_notify(args)
     return cmd_report(args)
 
 

@@ -343,7 +343,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <input id="mq-used" type="number" step="0.01" min="0" max="100" placeholder="例如 9.1 或 54.9" />
   </div>
   <div class="field">
-    <label>重置时间 CST (可选，如 12-01 18:46)</label>
+    <label>重置时间 <span id="modal-tz-lbl">本地时区</span> (可选，如 12-01 18:46)</label>
     <input id="mq-reset" type="text" placeholder="12-01 18:46" />
   </div>
   <div id="mq-msg" style="font-size:11px;margin-bottom:8px;color:var(--red)"></div>
@@ -372,6 +372,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <button class="pill" data-win="all">全部</button>
       </div>
       <button class="btn live-on" id="live-btn"><span class="dot ok"></span>实时 3s</button>
+      <button class="btn" id="notify-btn" title="开启或关闭 80%/95% 额度提醒与回血桌面通知">🔔 提醒: 关</button>
       <button class="btn" id="open-modal-btn">＋录入限额</button>
       <button class="btn" id="export-btn">导出 CSV</button>
       <button class="btn" id="theme-btn">☀ 亮色</button>
@@ -410,7 +411,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 
     <div class="card">
       <div class="card-head">
-        <span class="card-title">7日 × 24小时作业热力图 <span class="card-sub">(CST)</span></span>
+        <span class="card-title">7日 × 24小时作业热力图 <span class="card-sub">(<span id="tz-lbl">UTC+8</span>)</span></span>
         <div style="display:inline-flex;align-items:center;gap:4px;font-size:10px;color:var(--muted);">
           <span>低</span>
           <span class="swatch" style="background:var(--heat-0)"></span>
@@ -559,10 +560,10 @@ function fmtMetric(v, metric) {
   if (metric === 'calls') return Math.round(v || 0) + '';
   return fmtTok(v);
 }
-function remColor(rem) {
-  if (rem == null) return '#64748b';
-  if (rem <= 15) return '#ef4444';
-  if (rem <= 35) return '#f59e0b';
+function usedColor(used) {
+  if (used == null) return '#64748b';
+  if (used >= 80) return '#ef4444';
+  if (used >= 55) return '#f59e0b';
   return '#10b981';
 }
 function fmtCountdown(sec) {
@@ -576,8 +577,23 @@ function fmtCountdown(sec) {
   return `${m}分${s}秒`;
 }
 
-// Safe delegated tooltip & click handling (zero inline JS string quoting)
+// Safe delegated tooltip & click handling (100% textContent DOM nodes, zero innerHTML XSS surface)
 const tipEl = document.getElementById('tip');
+function renderSafeTip(title, bodyText) {
+  tipEl.textContent = '';
+  if (title) {
+    const hd = document.createElement('div');
+    hd.className = 'th';
+    hd.textContent = title;
+    tipEl.appendChild(hd);
+  }
+  const lines = String(bodyText || '').split('\n').filter(Boolean);
+  lines.forEach(line => {
+    const row = document.createElement('div');
+    row.textContent = line;
+    tipEl.appendChild(row);
+  });
+}
 function positionTip(evt) {
   const pad = 12;
   let x = evt.clientX + pad, y = evt.clientY + pad;
@@ -590,7 +606,7 @@ function positionTip(evt) {
 document.addEventListener('mouseover', evt => {
   const t = evt.target.closest('[data-tip]');
   if (!t) return;
-  tipEl.innerHTML = t.getAttribute('data-tip') || '';
+  renderSafeTip(t.getAttribute('data-tip-title') || '', t.getAttribute('data-tip') || '');
   tipEl.style.display = 'block';
   positionTip(evt);
 });
@@ -696,7 +712,7 @@ function renderQuota(data) {
   function renderBucketRow(b) {
     const rem = b.remaining_pct != null ? b.remaining_pct : 0;
     const used = b.used_pct != null ? b.used_pct : 0;
-    const col = b.reset_passed ? '#38bdf8' : remColor(rem);
+    const col = b.reset_passed ? '#38bdf8' : usedColor(used);
     const r = 23, circ = 2 * Math.PI * r;
     const dash = Math.max(used > 0 ? 2 : 0, circ * (used / 100));
     const usedDisp = (used > 0 && used < 10) ? used.toFixed(2) : used.toFixed(1);
@@ -742,7 +758,7 @@ function renderQuota(data) {
             <div><span class="b-name">${esc(winName)}</span> <span style="color:var(--muted)">剩 ${remDisp}%</span> ${badge}</div>
             <span style="color:var(--cyan);font-weight:600;font-size:11px" ${resetEpoch ? `data-reset-ts="${resetEpoch}"` : ''}>${b.reset_passed ? '已到期 · 待刷新' : '剩 ' + esc(b.reset_in_text)}</span>
           </div>
-          <div class="dual-bar" data-tip="${esc(`已用额度: <b>${usedDisp}%</b> · 周期时间已过: <b>${(b.time_elapsed_pct||0).toFixed(1)}%</b><br>重置时间: ${b.reset_time_cst} CST`)}">
+          <div class="dual-bar" data-tip-title="${esc(b.label)}" data-tip="${esc(`已用额度: ${usedDisp}% · 周期时间已过: ${(b.time_elapsed_pct||0).toFixed(1)}%\n重置时间: ${b.reset_time_cst} (${data.timezone_label || 'UTC+8'})`)}">
             <div class="dual-fill" style="width:${used}%;background:${col}"></div>
             ${b.time_elapsed_pct != null ? `<div class="time-marker" style="left:${Math.min(99, b.time_elapsed_pct)}%"></div>` : ''}
           </div>
@@ -777,6 +793,17 @@ function renderKPIs(data) {
   const w5 = w['5h'] || {}, wt = w['today'] || {}, w7 = w['7d'] || {};
   const wsel = data.selected_summary || w7;
   const b5 = data.burn_5h || {};
+  const wow = data.week_over_week || {};
+  let wowBadge = '<span class="badge muted" data-tip-title="自然周同进度环比" data-tip="上周同期缺少本地样本，暂不可比">较上周: 暂不可比</span>';
+  if (wow.comparable && wow.delta_pct != null) {
+    const cls = wow.delta_pct <= 0 ? 'ok' : (wow.delta_pct >= 35 ? 'warn' : 'purple');
+    const prevTok = fmtTok((wow.previous || {}).billable_tokens || 0);
+    const curTok = fmtTok((wow.current || {}).billable_tokens || 0);
+    const tipTxt = `本周已过 ${wow.elapsed_hours || 0}h: ${curTok}\n上周同期 ${wow.elapsed_hours || 0}h: ${prevTok}\n注: 按本地自然周同进度统计，独立于滚动配额周期`;
+    wowBadge = `<span class="badge ${cls}" style="cursor:help" data-tip-title="本周 vs 上周同进度环比" data-tip="${esc(tipTxt)}">${esc(wow.badge_text)}</span>`;
+  } else if (wow.badge_text) {
+    wowBadge = `<span class="badge muted" style="cursor:help" data-tip-title="自然周同进度环比" data-tip="${esc(wow.reason || '')}">${esc(wow.badge_text)}</span>`;
+  }
   document.getElementById('kpi-cards').innerHTML = `
     <div class="card kpi-card">
       <div style="display:flex;justify-content:space-between;align-items:center;"><span class="card-sub">近 5 小时有效消耗</span><span class="badge">燃速 ${fmtTok(b5.billable_tokens_per_hour||0)}/h</span></div>
@@ -791,7 +818,7 @@ function renderKPIs(data) {
       <div class="kpi-foot"><span>${wt.calls || 0} 次调用 · ${wt.tool_calls || 0} 工具</span><span>估算 ${fmtUsd(wt.est_cost_usd)}</span></div>
     </div>
     <div class="card kpi-card">
-      <div style="display:flex;justify-content:space-between;align-items:center;"><span class="card-sub">近 7 天周累计</span><span class="badge purple">Weekly</span></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:4px;"><span class="card-sub">近 7 天周累计</span>${wowBadge}</div>
       <div class="kpi-val" style="color:var(--purple)">${fmtTok(w7.billable_tokens)}</div>
       <div class="kpi-sub">含缓存总吞吐 ${fmtTok(w7.total_tokens)}</div>
       <div class="kpi-foot"><span>${w7.calls || 0} 次调用 · ${w7.conversations || 0} 会话</span><span>估算 ${fmtUsd(w7.est_cost_usd)}</span></div>
@@ -845,8 +872,9 @@ function renderMainChart(data) {
       }));
       paths += `<polyline fill="none" stroke="${c}" stroke-width="2" points="${coords.map(o => `${o.x.toFixed(1)},${o.y.toFixed(1)}`).join(' ')}" />`;
       coords.forEach(o => {
-        const tip = `<div class="th">${esc(b.label)} · ${esc(o.p.ts_cst)}</div>已使用: <b>${o.p.used_pct}%</b> · 剩余: <b>${o.p.remaining_pct}%</b>`;
-        paths += `<circle cx="${o.x.toFixed(1)}" cy="${o.y.toFixed(1)}" r="3" fill="${c}" style="cursor:pointer" data-tip="${esc(tip)}" />`;
+        const tipTitle = `${b.label} · ${o.p.ts_cst}`;
+        const tipTxt = `已使用: ${o.p.used_pct}% · 剩余: ${o.p.remaining_pct}%`;
+        paths += `<circle cx="${o.x.toFixed(1)}" cy="${o.y.toFixed(1)}" r="3" fill="${c}" style="cursor:pointer" data-tip-title="${esc(tipTitle)}" data-tip="${esc(tipTxt)}" />`;
       });
       leg += `<span class="legend-item"><span class="swatch" style="background:${c}"></span>${esc(b.label)}</span>`;
     });
@@ -884,11 +912,11 @@ function renderMainChart(data) {
   items.forEach((d, idx) => {
     const x = padL + idx * step + (step - barW) / 2;
     const totalV = Number(d[currentMetric] || 0);
-    const tip = `<div class="th">${esc(d.label)}</div>` +
-      `有效Token: <b>${fmtTok(d.billable_tokens)}</b> (输入 ${fmtTok(d.input_tokens)} / 输出 ${fmtTok(d.output_tokens)})<br>` +
-      `缓存命中: ${fmtTok(d.cache_read_tokens)} · 调用: <b>${d.calls}次</b> · 估算 <b>${fmtUsd(d.est_cost_usd)}</b>`;
+    const tipTxt =
+      `有效Token: ${fmtTok(d.billable_tokens)} (输入 ${fmtTok(d.input_tokens)} / 输出 ${fmtTok(d.output_tokens)})\n` +
+      `缓存命中: ${fmtTok(d.cache_read_tokens)} · 调用: ${d.calls}次 · 估算 ${fmtUsd(d.est_cost_usd)}`;
 
-    svg += `<g style="cursor:pointer" data-tip="${esc(tip)}">`;
+    svg += `<g style="cursor:pointer" data-tip-title="${esc(d.label)}" data-tip="${esc(tipTxt)}">`;
     svg += `<rect x="${(padL + idx * step).toFixed(1)}" y="${padT}" width="${step.toFixed(1)}" height="${plotH}" fill="transparent" />`;
 
     if (currentMetric === 'billable_tokens') {
@@ -942,9 +970,9 @@ function renderHeatmapAndPools(data) {
         else if (ratio >= 0.16) bg = 'var(--heat-2)';
         else bg = 'var(--heat-1)';
       }
-      const tip = `<div class="th">${esc(r.label)} ${String(c.hour).padStart(2,'0')}:00</div>` +
-        `有效Token: <b>${fmtTok(c.billable_tokens)}</b> · 调用: <b>${c.calls}次</b> · 估算 ${fmtUsd(c.est_cost_usd)}`;
-      html += `<td><div class="hcell" style="background:${bg}" data-tip="${esc(tip)}"></div></td>`;
+      const tipTitle = `${r.label} ${String(c.hour).padStart(2,'0')}:00`;
+      const tipTxt = `有效Token: ${fmtTok(c.billable_tokens)} · 调用: ${c.calls}次 · 估算 ${fmtUsd(c.est_cost_usd)}`;
+      html += `<td><div class="hcell" style="background:${bg}" data-tip-title="${esc(tipTitle)}" data-tip="${esc(tipTxt)}"></div></td>`;
     });
     html += '</tr>';
   });
@@ -957,7 +985,7 @@ function renderHeatmapAndPools(data) {
   document.getElementById('pool-total-lbl').textContent = `总有效 ${fmtTok(totalTok)}`;
 
   // Stacked single horizontal bar + compact legend rows
-  const barSegs = pools.map(p => `<div style="width:${p.share_billable_pct}%;background:${POOL_COLORS[p.pool]||'#38bdf8'};height:100%" data-tip="${esc(`<div class='th'>${p.label}</div>有效: <b>${fmtTok(p.billable_tokens)} (${p.share_billable_pct}%)</b> · ${p.calls}次 · ${fmtUsd(p.est_cost_usd)}`)}"></div>`).join('');
+  const barSegs = pools.map(p => `<div style="width:${p.share_billable_pct}%;background:${POOL_COLORS[p.pool]||'#38bdf8'};height:100%" data-tip-title="${esc(p.label)}" data-tip="${esc(`有效: ${fmtTok(p.billable_tokens)} (${p.share_billable_pct}%) · ${p.calls}次 · ${fmtUsd(p.est_cost_usd)}`)}"></div>`).join('');
   const listRows = pools.map(p => `
     <span class="legend-item" style="margin-right:10px;">
       <span class="swatch" style="background:${POOL_COLORS[p.pool]||'#38bdf8'}"></span>
@@ -1137,6 +1165,17 @@ async function refresh() {
     const data = await res.json();
     lastData = data;
     document.getElementById('subtitle').textContent = `同步于 ${data.generated_at_cst} · 统计窗口：${WIN_NAMES[currentWin] || currentWin}`;
+    const tzLbl = data.timezone_label || 'UTC+8';
+    const tzEl = document.getElementById('tz-lbl');
+    if (tzEl) tzEl.textContent = tzLbl;
+    const mTzEl = document.getElementById('modal-tz-lbl');
+    if (mTzEl) mTzEl.textContent = tzLbl;
+    const nOn = !!(data.notifications && data.notifications.enabled);
+    const nBtn = document.getElementById('notify-btn');
+    if (nBtn) {
+      nBtn.textContent = nOn ? '🔔 提醒: 开' : '🔔 提醒: 关';
+      nBtn.classList.toggle('live-on', nOn);
+    }
     renderBanner(data);
     renderInsights(data);
     renderQuota(data);
@@ -1207,6 +1246,18 @@ document.getElementById('live-btn').addEventListener('click', () => {
   b.innerHTML = liveEnabled ? '<span class="dot ok"></span>实时 3s' : '<span class="dot"></span>已暂停';
   if (pollTimer) clearInterval(pollTimer);
   if (liveEnabled) pollTimer = setInterval(refresh, 3000);
+});
+
+document.getElementById('notify-btn').addEventListener('click', async () => {
+  const cur = !!(lastData && lastData.notifications && lastData.notifications.enabled);
+  try {
+    const res = await fetch('/api/preferences', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notifications_enabled: !cur }),
+    });
+    if (res.ok) refresh();
+  } catch (e) {}
 });
 
 document.getElementById('open-modal-btn').addEventListener('click', () => {

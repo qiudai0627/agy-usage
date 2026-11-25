@@ -395,7 +395,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
           <button class="pill active" data-ctab="5h">近5h燃速 (10m)</button>
           <button class="pill" data-ctab="24h">24h每小时</button>
           <button class="pill" data-ctab="7d">7日周趋势</button>
-          <button class="pill" data-ctab="quota">限额剩余曲线</button>
+          <button class="pill" data-ctab="quota">限额已用曲线</button>
         </div>
         <div class="pills" id="metric-pills">
           <button class="pill active" data-metric="billable_tokens">有效Token</button>
@@ -837,10 +837,10 @@ function renderMainChart(data) {
       const c = colors[idx % colors.length];
       // Deduplicate consecutive identical remaining_pct values (keep endpoints & changes)
       const raw = b.history;
-      const slim = raw.filter((pt, i) => i === 0 || i === raw.length - 1 || pt.remaining_pct !== raw[i - 1].remaining_pct);
+      const slim = raw.filter((pt, i) => i === 0 || i === raw.length - 1 || pt.used_pct !== raw[i - 1].used_pct);
       const coords = slim.map(p => ({
         x: padL + ((new Date(p.ts).getTime() - minT) / spanT) * (W - padL - padR),
-        y: padT + (1 - p.remaining_pct / 100) * (H - padT - padB),
+        y: padT + (1 - (p.used_pct || 0) / 100) * (H - padT - padB),
         p,
       }));
       paths += `<polyline fill="none" stroke="${c}" stroke-width="2" points="${coords.map(o => `${o.x.toFixed(1)},${o.y.toFixed(1)}`).join(' ')}" />`;

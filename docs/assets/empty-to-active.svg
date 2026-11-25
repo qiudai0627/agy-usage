@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 160" width="840" height="160">
+  <rect width="840" height="160" rx="12" fill="#0b1220" stroke="#24324d"/>
+  <!-- Left: Waiting state -->
+  <rect x="20" y="20" width="360" height="120" rx="10" fill="#111a2e" stroke="#f59e0b" stroke-dasharray="5 4"/>
+  <text x="38" y="48" fill="#fbbf24" font-family="sans-serif" font-size="12.5" font-weight="700">① 刚装好时：等待第一次额度推送</text>
+  <text x="38" y="74" fill="#cbd5e1" font-family="sans-serif" font-size="11">网页显示「等待首次触发」，不把未知画成 0%。</text>
+  <text x="38" y="98" fill="#38bdf8" font-family="sans-serif" font-size="11" font-weight="600">动作：新开一个 agy 窗口随便发句话（或粘贴提示命令）</text>
+  <text x="38" y="120" fill="#64748b" font-family="sans-serif" font-size="10.5">本地历史 Token 统计此时已经可以正常查看</text>
+
+  <!-- Arrow -->
+  <text x="420" y="86" text-anchor="middle" fill="#38bdf8" font-family="sans-serif" font-size="22" font-weight="700">➜</text>
+
+  <!-- Right: Active state -->
+  <rect x="460" y="20" width="360" height="120" rx="10" fill="#111a2e" stroke="#10b981"/>
+  <text x="478" y="48" fill="#10b981" font-family="sans-serif" font-size="12.5" font-weight="700">② 激活成功后：四格进度实时同步</text>
+  <text x="478" y="74" fill="#e2e8f0" font-family="monospace" font-size="11">Gemini  5h: 已用 18.0%  |  周: 已用 15.0%</text>
+  <text x="478" y="96" fill="#e2e8f0" font-family="monospace" font-size="11">Claude  5h: 已用 24.0%  |  周: 已用 62.0%</text>
+  <text x="478" y="120" fill="#94a3b8" font-family="sans-serif" font-size="10.5">之后每次对话自动更新，无需再手动操作</text>
+</svg>

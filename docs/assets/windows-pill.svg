@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 240" width="640" height="240">
+  <rect width="640" height="240" rx="12" fill="#0b1220" stroke="#24324d"/>
+  <!-- Expanded Windows Widget bottom-right -->
+  <rect x="316" y="18" width="304" height="176" rx="8" fill="#0f1728" stroke="#3b82f6" stroke-width="1.2"/>
+  <text x="332" y="40" fill="#10b981" font-family="sans-serif" font-size="12" font-weight="700">●</text>
+  <text x="348" y="40" fill="#f8fafc" font-family="monospace" font-size="11.5" font-weight="700">G 15% │ C 62%</text>
+  <text x="604" y="40" text-anchor="end" fill="#38bdf8" font-family="sans-serif" font-size="12" font-weight="700">↗</text>
+  <line x1="328" y1="50" x2="608" y2="50" stroke="#1e293b"/>
+  <text x="332" y="70" fill="#cbd5e1" font-family="monospace" font-size="10.5">Gemini5h ██░░░░░░  18.0% (20:00)</text>
+  <text x="332" y="88" fill="#cbd5e1" font-family="monospace" font-size="10.5">Gemini周  █░░░░░░░  15.0% (12-01)</text>
+  <text x="332" y="106" fill="#cbd5e1" font-family="monospace" font-size="10.5">Claude5h ██░░░░░░  24.0% (19:25)</text>
+  <text x="332" y="124" fill="#fbbf24" font-family="monospace" font-size="10.5">Claude周  █████░░░  62.0% (11-30)</text>
+  <line x1="328" y1="136" x2="608" y2="136" stroke="#1e293b"/>
+  <text x="332" y="153" fill="#94a3b8" font-family="sans-serif" font-size="10.5">近7日有效: 12.6M tok · 双击可收起成窄条</text>
+  <rect x="332" y="163" width="104" height="22" rx="5" fill="#2563eb"/>
+  <text x="384" y="178" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10.5" font-weight="600">打开完整监控台</text>
+
+  <!-- Simulated Windows Taskbar -->
+  <rect x="0" y="206" width="640" height="34" fill="#141c2e"/>
+  <text x="622" y="227" text-anchor="end" fill="#cbd5e1" font-family="sans-serif" font-size="10.5">拼  🔊  🌐  14:30</text>
+
+  <!-- Left callout -->
+  <text x="24" y="64" fill="#f8fafc" font-family="sans-serif" font-size="13" font-weight="700">Windows 右下角迷你胶囊</text>
+  <text x="24" y="88" fill="#94a3b8" font-family="sans-serif" font-size="11">• 无黑框后台运行，平时只占一条小胶囊</text>
+  <text x="24" y="108" fill="#94a3b8" font-family="sans-serif" font-size="11">• 双击展开四格进度，右键呼出快捷菜单</text>
+  <text x="24" y="128" fill="#94a3b8" font-family="sans-serif" font-size="11">• 无需额外安装第三方依赖包</text>
+</svg>

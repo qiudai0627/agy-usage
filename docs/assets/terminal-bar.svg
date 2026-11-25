@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 116" width="920" height="116">
+  <rect width="920" height="116" rx="10" fill="#0d1117" stroke="#24324d"/>
+  <!-- Prompt box -->
+  <rect x="16" y="14" width="888" height="34" rx="6" fill="#161b22" stroke="#30363d"/>
+  <text x="30" y="35" fill="#8b949e" font-family="monospace" font-size="12">&gt; 继续编写单元测试...</text>
+
+  <!-- Row 1: Native agy status bar (model shown ONCE here) -->
+  <text x="20" y="70" fill="#6e7681" font-family="monospace" font-size="11.5">accept-edits · workspace/demo-app</text>
+  <text x="896" y="70" text-anchor="end" fill="#8b949e" font-family="monospace" font-size="11.5">Gemini 4 Carbon · high</text>
+
+  <!-- Row 2: Custom 4-bucket statusline (no duplicate model name, right margin reserved) -->
+  <text x="20" y="96" fill="#10b981" font-family="monospace" font-size="12">●</text>
+  <text x="36" y="96" fill="#38bdf8" font-family="monospace" font-size="11.5">上下文 ██░░ 38% 403k</text>
+  <text x="192" y="96" fill="#484f58" font-family="monospace" font-size="11.5">│</text>
+  <text x="206" y="96" fill="#10b981" font-family="monospace" font-size="11.5">Gemini5h █░░░ 已用18.0%  Gemini周 █░░░ 已用15.0%</text>
+  <text x="536" y="96" fill="#484f58" font-family="monospace" font-size="11.5">│</text>
+  <text x="550" y="96" fill="#10b981" font-family="monospace" font-size="11.5">Claude5h █░░░ 已用24.0%</text>
+  <text x="712" y="96" fill="#f59e0b" font-family="monospace" font-size="11.5">Claude周 ███░ 已用62.0%</text>
+
+  <!-- Right reserved zone indicator -->
+  <rect x="780" y="80" width="124" height="22" rx="11" fill="#1d4ed8" opacity="0.22" stroke="#3b82f6" stroke-dasharray="3 2"/>
+  <text x="842" y="95" text-anchor="middle" fill="#93c5fd" font-family="sans-serif" font-size="9.5">右侧预留防遮挡区</text>
+</svg>

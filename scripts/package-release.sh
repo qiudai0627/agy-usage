@@ -1,48 +1,96 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 一键生成干净可分享的 zip 发布包（内置严格隐私与个人路径零泄露门禁扫描）
+# 一键生成干净可分享的 zip 发布包（显式文件清单 + 严格隐私与凭证门禁扫描）
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_ZIP="${1:-${HOME}/.cache/agy-usage/agy-usage-release.zip}"
 
 STAGE_DIR="$(mktemp -d)"
 trap 'rm -rf "$STAGE_DIR"' EXIT
 PKG_DIR="$STAGE_DIR/agy-usage"
-mkdir -p "$PKG_DIR/src" "$PKG_DIR/macos" "$PKG_DIR/windows" "$PKG_DIR/scripts" "$PKG_DIR/.github/workflows"
+mkdir -p "$PKG_DIR/src" "$PKG_DIR/macos" "$PKG_DIR/windows" "$PKG_DIR/scripts" \
+         "$PKG_DIR/docs/assets" "$PKG_DIR/tests" "$PKG_DIR/.github/workflows"
 
-cp "$ROOT_DIR/README.md" \
-   "$ROOT_DIR/LICENSE" \
-   "$ROOT_DIR/.gitignore" \
-   "$ROOT_DIR/install.sh" \
-   "$ROOT_DIR/uninstall.sh" \
-   "$ROOT_DIR/install.ps1" \
-   "$ROOT_DIR/uninstall.ps1" \
-   "$ROOT_DIR/verify.sh" \
-   "$ROOT_DIR/Start-Mac.command" \
-   "$ROOT_DIR/Start-Windows.bat" \
-   "$PKG_DIR/"
+# Explicit file manifest (never globs untracked private scripts)
+ROOT_FILES=(
+  README.md
+  LICENSE
+  .gitignore
+  install.sh
+  uninstall.sh
+  install.ps1
+  uninstall.ps1
+  verify.sh
+  Start-Mac.command
+  Start-Windows.bat
+)
+for f in "${ROOT_FILES[@]}"; do
+  cp "$ROOT_DIR/$f" "$PKG_DIR/$f"
+done
 
-cp "$ROOT_DIR/.github/workflows/ci.yml" "$PKG_DIR/.github/workflows/"
-cp "$ROOT_DIR/src/"*.py "$PKG_DIR/src/"
+SRC_FILES=(cli.py core.py statusline.py web_ui.py)
+for f in "${SRC_FILES[@]}"; do
+  cp "$ROOT_DIR/src/$f" "$PKG_DIR/src/$f"
+done
+
+ASSET_FILES=(
+  overview-4buckets.svg
+  macos-pill.svg
+  windows-pill.svg
+  terminal-bar.svg
+  empty-to-active.svg
+)
+for f in "${ASSET_FILES[@]}"; do
+  cp "$ROOT_DIR/docs/assets/$f" "$PKG_DIR/docs/assets/$f"
+done
+
+cp "$ROOT_DIR/.github/workflows/ci.yml" "$PKG_DIR/.github/workflows/ci.yml"
 cp "$ROOT_DIR/macos/MenuBarApp.swift" "$ROOT_DIR/macos/build-app.sh" "$PKG_DIR/macos/"
 cp "$ROOT_DIR/windows/tray_widget.pyw" "$PKG_DIR/windows/"
 cp "$ROOT_DIR/scripts/package-release.sh" "$PKG_DIR/scripts/"
+cp "$ROOT_DIR/tests/test_suite.py" "$PKG_DIR/tests/"
 
 chmod 755 "$PKG_DIR/install.sh" "$PKG_DIR/uninstall.sh" "$PKG_DIR/verify.sh" \
           "$PKG_DIR/Start-Mac.command" "$PKG_DIR/macos/build-app.sh" \
-          "$PKG_DIR/scripts/package-release.sh" "$PKG_DIR/src/"*.py
+          "$PKG_DIR/scripts/package-release.sh" "$PKG_DIR/src/"*.py "$PKG_DIR/tests/test_suite.py"
 
-echo "==> 执行隐私与个人路径零泄露门禁扫描..."
-CURRENT_USER="$(id -un)"
-USER_PREFIX="/Users/"
-WIN_PREFIX='C:\\Users\\'
-PATTERN="(${USER_PREFIX}[A-Za-z0-9._-]+|${WIN_PREFIX}[A-Za-z0-9._-]+|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}|${CURRENT_USER})"
+echo "==> 执行隐私、个人路径与凭证零泄露门禁扫描..."
+PKG_DIR="$PKG_DIR" CURRENT_USER="$(id -un)" python3 - <<'PY'
+import os, re, sys
+from pathlib import Path
 
-if grep -rnE "$PATTERN" "$PKG_DIR"; then
-  echo "✖ 阻断打包：检测到疑似个人路径、本机用户名或私人邮箱字符串！" >&2
-  exit 1
-fi
-echo "✓ 隐私门禁通过（0 个人路径 / 0 本机用户名 / 0 邮箱 / 0 历史数据）"
+pkg = Path(os.environ["PKG_DIR"])
+cur_user = os.environ.get("CURRENT_USER", "").strip()
+
+patterns = [
+    ("macOS 个人路径", re.compile(r"/Users/[A-Za-z0-9._-]+")),
+    ("Linux 个人路径", re.compile(r"/home/(?!runner\b)[A-Za-z0-9._-]+")),
+    ("Windows 个人路径", re.compile(r"C:\\Users\\[A-Za-z0-9._-]+", re.IGNORECASE)),
+    ("私人邮箱", re.compile(r"[A-Za-z0-9._%+-]+@(?!example\.com\b|localhost\b|users\.noreply\.github\.com\b)[A-Za-z0-9.-]+\.[A-Za-z]{2,}")),
+    ("凭证密钥", re.compile(r"(AIza[0-9A-Za-z_-]{30,}|gh[pousr]_[A-Za-z0-9]{25,}|sk-[A-Za-z0-9]{25,}|ya29\.[0-9A-Za-z_-]+|BEGIN [A-Z ]*PRIVATE KEY)")),
+]
+if cur_user and cur_user.lower() not in ("runner", "root", "ubuntu", "admin", "user"):
+    patterns.append(("本机用户名", re.compile(rf"\b{re.escape(cur_user)}\b", re.IGNORECASE)))
+
+hits = []
+for p in sorted(pkg.rglob("*")):
+    if p.is_symlink():
+        hits.append((str(p), "禁止包含软链接"))
+        continue
+    if not p.is_file():
+        continue
+    text = p.read_text(encoding="utf-8", errors="strict")
+    for label, rx in patterns:
+        m = rx.search(text)
+        if m:
+            hits.append((str(p.relative_to(pkg)), f"{label}: {m.group(0)}"))
+
+if hits:
+    for rel, detail in hits:
+        sys.stderr.write(f"✖ 门禁阻断 [{rel}] -> {detail}\n")
+    sys.exit(1)
+print("✓ 隐私与凭证门禁通过（0 个人路径 / 0 用户名 / 0 私人邮箱 / 0 密钥）")
+PY
 
 mkdir -p "$(dirname "$OUT_ZIP")"
 rm -f "$OUT_ZIP"

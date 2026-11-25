@@ -1,78 +1,143 @@
-# agy-usage · Antigravity 实时用量与每周限额监控台
+# 大模型额度还够不够？一眼看用掉多少、什么时候恢复。
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-success)
-![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(Python%20Stdlib)-brightgreen)
+用 Antigravity 写代码时，**5 小时限额**和**每周限额**常常不知不觉就快见底了，等突然卡住才发现已经晚了。  
+这个小工具在**你自己电脑本地**读取使用记录，帮你把额度做成直观的进度条和倒计时——**不需要输入任何账号密码，也不会往外网上传你的对话内容**（界面里的费用数字仅按公开单价做参考估算，不代表官方实际账单）。
 
-专为 **Google Antigravity (`agy` CLI / 桌面端)** 打造的跨平台纯本地实时用量与配额监控工具（**macOS + Windows + Linux**，零第三方依赖，仅需 Python 3.9+ 标准库）。
+![四格额度监控总览](./docs/assets/overview-4buckets.svg)
 
----
-
-## 核心特性
-
-1. **官方双限额池实时监控（毫秒级同步，4 位小数精度）**
-   - 自动识别并分离 **Google Gemini 自家模型池** 与 **Claude / GPT 第三方模型池 (`3p`)**。
-   - 同屏追踪两套池子各自的 **当前用量（5 小时滚动窗口）** 与 **每周限额（7 天周期）**、精确重置倒计时（CST）、时间进度 vs 额度消耗配速比、日均安全预算、耗尽预测与每 1% 折合有效 Token。
-   - **全模型与全订阅档位自适应**：自动适配 Free / AI Pro / AI Ultra 等任意档位与新老模型。
-
-2. **四端形态齐全（针对刘海屏 Mac 与 Windows 专项优化）**
-   - **Web 可视化监控台**（`http://127.0.0.1:18420`，暗色/亮色双主题，每 3 秒自动刷新）：双池同屏对比、Tab 切换趋势图（5h 燃速 / 24h 柱图 / 7d 趋势 / 限额剩余曲线）、7×24 热力图、缓存节省分析、会话逐轮上下文膨胀曲线抽屉、CSV 导出与手动录入限额。
-   - **macOS 防刘海毛玻璃悬浮胶囊 + 顶部菜单栏 (`AGY Usage.app`)**：原生 Swift 编译（~150 KB），默认在屏幕右上角菜单栏正下方显示原生暗色毛玻璃胶囊 `● G 9% │ C 55%`（彻底解决 14"/16" MacBook Pro 摄像头刘海遮挡菜单栏图标的问题），支持自由拖拽记忆位置、单击弹出四桶进度菜单、可随时在菜单内开关胶囊或开启登录自启。
-   - **Windows 右下角桌面迷你悬浮胶囊 (`tray_widget.pyw`)**：纯标准库无黑框运行，常驻任务栏上方显示实时状态，双击展开详情面板、可自由拖动、右键呼出菜单。
-   - **`agy` 底部实时状态栏 + 终端 TUI (`agy-usage` / `agy-usage watch`)**。
-
-3. **100% 本地隐私安全（MIT 开源协议）**
-   - 不索取任何账号密码或 OAuth Token，不上传任何遥测数据。
-   - 运行时快照保存在系统个人缓存目录（macOS/Linux: `~/.cache/agy-usage/`；Windows: `%LOCALAPPDATA%\agy-usage\`），项目目录零个人数据残留。
+- **网页监控台**：左右并排看清 Gemini 和 Claude/GPT 两套池子的「已用 %」和恢复时间。
+- **桌面小胶囊**：Mac 停在右上角（不怕刘海挡住），Windows 停在右下角，写代码时余光就能瞄一眼。
+- **终端底部进度条**：不遮挡对话，跟着你的每次提问自动刷新。
 
 ---
 
-## 快速安装与启动
+## 开始前准备
 
-### 方式 1：一行命令全自动安装（最推荐，零拦截弹窗）
+1. 你的电脑上已经安装并在用 **Google Antigravity**。
+2. 电脑里有 **Python 3.9 或更新版本**（Mac 一般自带或装过开发工具就有；Windows 安装 Python 时记得勾选 `Add Python to PATH`）。
+3. **可选**：Mac 右上角毛玻璃小胶囊需要系统自带的命令行编译工具（`xcode-select --install`）；如果暂时没装也不影响，网页监控台照样能直接用。
 
-- **macOS / Linux**：打开终端复制粘贴回车：
+---
+
+## 三步用起来
+
+### 第 1 步：安装启动
+
+**如果你用 Mac：**
+- **方法一（推荐，打开“终端”粘贴回车）**：
   ```bash
   curl -fsSL https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.sh | bash
   ```
-- **Windows PowerShell**：打开 PowerShell 复制粘贴回车（需本机已安装 Python 3.9+）：
+- **方法二（不想敲命令）**：去 [Releases 下载压缩包](https://github.com/qiudai0627/agy-usage/releases) 解压，右键点击 **`Start-Mac.command`** 选择「**打开**」。
+
+**如果你用 Windows：**
+- **方法一（推荐，打开 PowerShell 粘贴回车）**：
   ```powershell
   irm https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.ps1 | iex
   ```
-
-### 方式 2：下载压缩包双击启动（免敲命令行）
-从 [GitHub Releases](https://github.com/qiudai0627/agy-usage/releases) 下载 `agy-usage-release.zip` 并解压：
-- **macOS**：在访达（Finder）中直接双击 **`Start-Mac.command`**（首次若提示未识别开发者，右键点“打开”即可）。
-- **Windows**：在资源管理器直接双击 **`Start-Windows.bat`**。
-
-> **提示**：若安装时已有正在运行的 `agy` 终端窗口，在该 `agy` 输入框执行一次安装输出提示的 `/statusline ...` 命令（或重开一个 `agy` 窗口），即可立刻开始同步实时限额。
+- **方法二（不想敲命令）**：下载解压后，直接双击 **`Start-Windows.bat`**。
 
 ---
 
-## 常用命令
+### 第 2 步：装完看屏幕哪里？
 
+安装完成后会自动打开三个地方（你喜欢看哪个就用哪个）：
+1. **浏览器网页**：自动打开 `http://127.0.0.1:18420` 完整监控台。
+2. **屏幕角落小胶囊**：Mac 看屏幕右上角菜单栏正下方；Windows 看屏幕右下角任务栏上方（按住可拖动位置，点击可展开四格进度）。
+
+| Mac 右上角防刘海小胶囊 | Windows 右下角迷你小胶囊 |
+| :---: | :---: |
+| ![Mac 悬浮胶囊示意](./docs/assets/macos-pill.svg) | ![Windows 悬浮胶囊示意](./docs/assets/windows-pill.svg) |
+
+3. **终端最底下**：多出一条四格彩色额度条（不会重复印一遍模型名字，右边也留好了空位避开提示框）：
+
+![终端底部彩色额度条示意](./docs/assets/terminal-bar.svg)
+
+---
+
+### 第 3 步：激活额度百分比
+
+**新开一个 Antigravity 窗口随便发一句话**（或者在已经开着的窗口里，把安装结束时提示的那行激活口令粘贴进去发一次），几秒内四个格子的「已用 %」和恢复倒计时就会全部亮起来。
+
+![从等待推送到显示百分比](./docs/assets/empty-to-active.svg)
+
+---
+
+## 没显示百分比怎么办？
+
+对照下面三种情况，做一个动作就能解决：
+
+1. **网页 `http://127.0.0.1:18420` 打不开**
+   - **原因**：后台看板没启动。
+   - **怎么做**：重新双击一次 `Start-Mac.command`（Mac）或 `Start-Windows.bat`（Windows）。
+   - **成功标志**：浏览器正常打开深色监控页面。
+2. **网页打开了，但上面提示「等待首次触发」**
+   - **原因**：你安装之前就已经开着的旧对话窗口，还没给监控台发过一次额度数据（此时工具绝不会拿假 `0%` 糊弄你）。
+   - **怎么做**：关掉旧窗口**重开一个新的 Antigravity 对话发一句话**，或者点网页右上角的复制按钮，把那行口令贴进当前对话回车。
+   - **成功标志**：网页顶部变成左右两张带圆环的卡片，显示真实的「已用 %」。
+3. **百分比停在很久以前不动了**
+   - **原因**：这段时间你没有发起新对话，或者刚刚跨过重置时间点还没发新消息。
+   - **怎么做**：在 Antigravity 里正常发一条消息，后端就会刷新最新额度。
+   - **成功标志**：网页顶部「同步于…」变成刚刚的时间，「待刷新」变成新的倒计时。
+
+---
+
+## 四个格子怎么读？
+
+- **左边两格是 Google Gemini 池，右边两格是 Claude / GPT 池**：这两套额度是**分开算**的。哪怕右边 Claude 用到了 60%，左边 Gemini 依然有充足额度可以用。
+- **每个池子都分「5h 窗口」和「7d 每周」两条线**：
+  - **5h 窗口**：防短时间猛刷的短期额度，几小时就会自动回满。
+  - **7d 每周**：一周的总额度，哪一条先到 **100%** 都会触发限额。
+- **统一看「已用 %」**：数字越小、绿条越短说明额度越宽裕；超过 55% 变黄提醒，超过 80% 变红告急。
+
+---
+
+## 常见问题（FAQ）
+
+- **问：为什么官方网页里写「已使用 0%」，这里却能看到小数？**  
+  答：可能是官方页面按整数四舍五入展示或存在刷新时间差（比如“1 小时前更新”）。本工具直接展示本机收到的原始比例，方便尽早看出趋势，但不替代官方最终结算口径。
+- **问：把浏览器网页关掉，后台还会继续记录吗？**  
+  答：会的。只要你在用 Antigravity 对话，底栏每次刷新都会自动把最新额度记在本机缓存里，随时再打开网页就能看到完整曲线。
+- **问：我的数据存在哪里？安全吗？**  
+  答：全部保存在你自己电脑的本地缓存目录（Mac 在 `~/.cache/agy-usage/`，Windows 在 `%LOCALAPPDATA%\agy-usage\`），不联网上传。
+- **问：遇到问题或有建议怎么反馈？**  
+  答：直接在本仓库提交 [GitHub Issue](https://github.com/qiudai0627/agy-usage/issues) 即可。
+
+---
+
+## 怎么卸载？
+
+不想用了可以一键还原配置并停掉后台：
+
+- **Mac / Linux**：在项目目录运行 `./uninstall.sh`（如果是一行命令安装的，运行 `~/.local/share/agy-usage/uninstall.sh`）。
+- **Windows**：在项目目录打开 PowerShell 运行：
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File .\uninstall.ps1
+  ```
+  *(如果是远程一行命令安装的，脚本位于 `%LOCALAPPDATA%\agy-usage\app\uninstall.ps1`，请**先运行它完成卸载**，最后如果不想保留历史曲线，再手动删除 `%LOCALAPPDATA%\agy-usage` 或 Mac 的 `~/.cache/agy-usage` 文件夹。)*
+
+---
+
+<details>
+<summary><b>附录：命令行速查、健康清理与开发者说明（点击展开）</b></summary>
+
+### 常用终端命令
 ```bash
-agy-usage                    # 终端即时完整报告（支持 -w 5h/today/24h/week/7d/all）
-agy-usage watch              # 终端实时刷新大屏（每 2s，适合 tmux 分屏）
-agy-usage daemon status      # 查看后台 Web 看板状态（start / stop / restart）
-agy-usage web                # 前台启动 Web 看板（默认 http://127.0.0.1:18420）
-agy-usage clean              # 压缩去重历史快照、轮转日志并清理孤儿缓存索引
-agy-usage doctor             # 体检存储占用、陈旧会话与空壳记录（支持 --prune-stale 官方接口安全清理）
-agy-usage json               # 导出结构化 JSON
+agy-usage                    # 终端打印完整报告（支持 -w 5h/today/24h/week/7d/all）
+agy-usage watch              # 终端每 2 秒自动刷新面板
+agy-usage daemon status      # 查看后台网页服务状态（支持 start / stop / restart）
+agy-usage clean              # 压缩去重历史快照、轮转日志并清理多余配置备份
+agy-usage doctor             # 只读体检存储占用与空壳记录
+agy-usage json               # 导出结构化 JSON 数据
 ```
 
-## 打包干净分享包（含自动隐私门禁）
+### 技术说明与打包自检
+- 本项目使用 Python 3.9+ 标准库与 macOS 原生 Swift 编写，零第三方包依赖，前端无 Node 构建链。
+- 本地开发验证与零隐私泄露打包：
+  ```bash
+  ./verify.sh
+  ./scripts/package-release.sh
+  ```
+- 开源许可：[MIT License](./LICENSE)
 
-```bash
-./scripts/package-release.sh
-```
-自动提取纯源码与脚本到临时沙箱，执行**个人路径 / 用户名 / GitHub 账号 / 邮箱零泄露扫描**，通过后生成 `~/.cache/agy-usage/agy-usage-release.zip`。
-
-## 卸载还原
-
-- **macOS / Linux**：`./uninstall.sh`
-- **Windows**：`powershell -ExecutionPolicy Bypass -File .\uninstall.ps1`
-
-## 开源协议
-
-本项目基于 [MIT License](./LICENSE) 开源。
+</details>

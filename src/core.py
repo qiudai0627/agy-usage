@@ -46,6 +46,13 @@ APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get("AGY_USAGE_DATA_DIR", str(_default_data_dir())))
 LIVE_STATE_FILE = DATA_DIR / "live_state.json"
 SNAPSHOTS_FILE = DATA_DIR / "quota_snapshots.jsonl"
+TRANSCRIPT_INDEX_FILE = DATA_DIR / "transcript_index.json"
+DAILY_ARCHIVE_FILE = DATA_DIR / "quota_daily_archive.jsonl"
+WEB_LOG_FILE = DATA_DIR / "web.log"
+
+# Two-tier incremental cache: path -> (mtime_ns, size, parsed_events)
+_MEM_TRANSCRIPT_CACHE: Dict[str, Tuple[int, int, List[Dict[str, Any]]]] = {}
+_DISK_INDEX_LOADED: bool = False
 
 # Reference list-price estimates (USD per 1M tokens) for rough cost & cache-savings estimation only.
 # Clearly labeled as "估算" in all UIs; actual billing depends on Antigravity subscription/credits.
@@ -265,9 +272,110 @@ def load_agy_settings() -> Dict[str, Any]:
         return {}
 
 
+def _hydrate_event_ts(ev: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if "ts" in ev and isinstance(ev["ts"], datetime):
+        return ev
+    dt = parse_iso_dt(ev.get("ts_iso"))
+    if dt is None:
+        return None
+    out = dict(ev)
+    out["ts"] = dt
+    return out
+
+
+def _load_disk_transcript_index() -> None:
+    global _DISK_INDEX_LOADED
+    if _DISK_INDEX_LOADED:
+        return
+    _DISK_INDEX_LOADED = True
+    if not TRANSCRIPT_INDEX_FILE.exists():
+        return
+    try:
+        raw = json.loads(TRANSCRIPT_INDEX_FILE.read_text(encoding="utf-8"))
+        entries = raw.get("files") if isinstance(raw, dict) else None
+        if not isinstance(entries, dict):
+            return
+        for path_str, info in entries.items():
+            if not isinstance(info, dict):
+                continue
+            mtime_ns = int(info.get("mtime_ns") or 0)
+            size = int(info.get("size") or 0)
+            evs = []
+            for item in info.get("events") or []:
+                if isinstance(item, dict):
+                    h = _hydrate_event_ts(item)
+                    if h is not None:
+                        evs.append(h)
+            _MEM_TRANSCRIPT_CACHE[path_str] = (mtime_ns, size, evs)
+    except Exception:
+        pass
+
+
+def _save_disk_transcript_index() -> None:
+    try:
+        ensure_data_dir()
+        files_out: Dict[str, Any] = {}
+        for path_str, (mtime_ns, size, evs) in _MEM_TRANSCRIPT_CACHE.items():
+            serializable = [{k: v for k, v in e.items() if k != "ts"} for e in evs]
+            files_out[path_str] = {"mtime_ns": mtime_ns, "size": size, "events": serializable}
+        tmp = TRANSCRIPT_INDEX_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps({"version": 1, "files": files_out}, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, TRANSCRIPT_INDEX_FILE)
+    except Exception:
+        pass
+
+
+def _parse_single_transcript(p: Path, cid: str) -> List[Dict[str, Any]]:
+    file_events: List[Dict[str, Any]] = []
+    with p.open("r", encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            if "input_tokens" not in d and "output_tokens" not in d:
+                continue
+            dt = parse_iso_dt(d.get("created_at"))
+            if dt is None:
+                continue
+            in_tok = int(d.get("input_tokens") or 0)
+            cache_tok = int(d.get("cache_read_tokens") or 0)
+            out_tok = int(d.get("output_tokens") or 0)
+            model = d.get("model") or "unknown"
+            tool_names = extract_tool_names(d.get("tool_calls"))
+            file_events.append(
+                {
+                    "conversation_id": cid,
+                    "step_index": int(d.get("step_index") or 0),
+                    "ts": dt,
+                    "ts_iso": dt.isoformat(),
+                    "model": model,
+                    "pool": classify_model_pool(model),
+                    "input_tokens": in_tok,
+                    "cache_read_tokens": cache_tok,
+                    "output_tokens": out_tok,
+                    "total_tokens": in_tok + cache_tok + out_tok,
+                    "billable_tokens": in_tok + out_tok,
+                    "context_size": in_tok + cache_tok,
+                    "est_cost_usd": estimate_cost_usd(model, in_tok, cache_tok, out_tok),
+                    "cache_saved_usd": estimate_cache_saved_usd(model, cache_tok),
+                    "tool_count": len(tool_names),
+                    "tool_names": tool_names,
+                    "has_thinking": bool(d.get("thinking")),
+                    "has_error": bool(d.get("error")),
+                }
+            )
+    return file_events
+
+
 def load_transcript_events() -> List[Dict[str, Any]]:
+    _load_disk_transcript_index()
     events: List[Dict[str, Any]] = []
     seen_convs = set()
+    active_paths = set()
+    dirty = False
 
     for agy_root in _discover_agy_dirs():
         brain_dir = agy_root / "brain"
@@ -283,49 +391,29 @@ def load_transcript_events() -> List[Dict[str, Any]]:
             if cid != "unknown" and cid in seen_convs:
                 continue
             seen_convs.add(cid)
+            active_paths.add(path_str)
             try:
-                with p.open("r", encoding="utf-8", errors="replace") as fh:
-                    for line in fh:
-                        if not line.strip():
-                            continue
-                        try:
-                            d = json.loads(line)
-                        except Exception:
-                            continue
-                        if "input_tokens" not in d and "output_tokens" not in d:
-                            continue
-                        dt = parse_iso_dt(d.get("created_at"))
-                        if dt is None:
-                            continue
-                        in_tok = int(d.get("input_tokens") or 0)
-                        cache_tok = int(d.get("cache_read_tokens") or 0)
-                        out_tok = int(d.get("output_tokens") or 0)
-                        model = d.get("model") or "unknown"
-                        tool_names = extract_tool_names(d.get("tool_calls"))
-                        events.append(
-                            {
-                                "conversation_id": cid,
-                                "step_index": int(d.get("step_index") or 0),
-                                "ts": dt,
-                                "ts_iso": dt.isoformat(),
-                                "model": model,
-                                "pool": classify_model_pool(model),
-                                "input_tokens": in_tok,
-                                "cache_read_tokens": cache_tok,
-                                "output_tokens": out_tok,
-                                "total_tokens": in_tok + cache_tok + out_tok,
-                                "billable_tokens": in_tok + out_tok,
-                                "context_size": in_tok + cache_tok,
-                                "est_cost_usd": estimate_cost_usd(model, in_tok, cache_tok, out_tok),
-                                "cache_saved_usd": estimate_cache_saved_usd(model, cache_tok),
-                                "tool_count": len(tool_names),
-                                "tool_names": tool_names,
-                                "has_thinking": bool(d.get("thinking")),
-                                "has_error": bool(d.get("error")),
-                            }
-                        )
+                st = p.stat()
+                cached = _MEM_TRANSCRIPT_CACHE.get(path_str)
+                if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
+                    events.extend(cached[2])
+                else:
+                    parsed = _parse_single_transcript(p, cid)
+                    _MEM_TRANSCRIPT_CACHE[path_str] = (st.st_mtime_ns, st.st_size, parsed)
+                    events.extend(parsed)
+                    dirty = True
             except Exception:
                 continue
+
+    # Automatically evict deleted/orphan transcript paths from index
+    stale_keys = [k for k in list(_MEM_TRANSCRIPT_CACHE.keys()) if k not in active_paths]
+    if stale_keys:
+        for k in stale_keys:
+            del _MEM_TRANSCRIPT_CACHE[k]
+        dirty = True
+
+    if dirty:
+        _save_disk_transcript_index()
 
     events.sort(key=lambda e: e["ts"])
     return events
@@ -1241,7 +1329,315 @@ def record_quota_snapshot(
             rec.update(extra)
         with SNAPSHOTS_FILE.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        # Auto-rotate & compact when snapshots file exceeds 512 KB
+        try:
+            if SNAPSHOTS_FILE.stat().st_size > 512 * 1024:
+                compact_quota_snapshots(keep_days=30)
+        except Exception:
+            pass
     return should_append
+
+
+def _quota_sig(q: Any) -> str:
+    if not isinstance(q, dict):
+        return ""
+    slim = {
+        k: (round(float(v.get("remaining_fraction")), 4) if v.get("remaining_fraction") is not None else None, v.get("reset_time"))
+        for k, v in sorted(q.items())
+        if isinstance(v, dict)
+    }
+    return json.dumps(slim, sort_keys=True)
+
+
+def compact_quota_snapshots(keep_days: int = 30) -> Dict[str, int]:
+    """Deduplicate flat runs in quota_snapshots.jsonl and archive entries older than keep_days."""
+    if not SNAPSHOTS_FILE.exists():
+        return {"before_lines": 0, "after_lines": 0, "archived_days": 0, "bytes_before": 0, "bytes_after": 0}
+
+    bytes_before = SNAPSHOTS_FILE.stat().st_size
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, keep_days))
+
+    kept_raw: List[Dict[str, Any]] = []
+    old_by_day: Dict[str, Dict[str, Dict[str, Any]]] = defaultdict(dict)
+    before_lines = 0
+
+    with SNAPSHOTS_FILE.open("r", encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            before_lines += 1
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            dt = parse_iso_dt(d.get("captured_at"))
+            if dt is None:
+                continue
+            if dt < cutoff:
+                day_key = dt.astimezone(CST).strftime("%Y-%m-%d")
+                for bid, bval in (d.get("quota") or {}).items():
+                    if not isinstance(bval, dict):
+                        continue
+                    rf = extract_remaining_fraction(bval)
+                    if rf is None:
+                        continue
+                    cur = old_by_day[day_key].get(bid)
+                    if cur is None:
+                        old_by_day[day_key][bid] = {"min_rem": rf, "last_rem": rf, "samples": 1}
+                    else:
+                        cur["min_rem"] = min(cur["min_rem"], rf)
+                        cur["last_rem"] = rf
+                        cur["samples"] += 1
+            else:
+                kept_raw.append(d)
+
+    # Deduplicate middle points of identical flat runs (keep endpoints of each run)
+    compacted: List[Dict[str, Any]] = []
+    sigs = [_quota_sig(x.get("quota")) for x in kept_raw]
+    for i, item in enumerate(kept_raw):
+        if i == 0 or i == len(kept_raw) - 1 or sigs[i] != sigs[i - 1] or sigs[i] != sigs[i + 1]:
+            compacted.append(item)
+
+    # Merge archived days into DAILY_ARCHIVE_FILE
+    archived_days = 0
+    if old_by_day:
+        existing_arch: Dict[str, Any] = {}
+        if DAILY_ARCHIVE_FILE.exists():
+            try:
+                for line in DAILY_ARCHIVE_FILE.read_text(encoding="utf-8", errors="replace").splitlines():
+                    if line.strip():
+                        row = json.loads(line)
+                        if row.get("date"):
+                            existing_arch[row["date"]] = row
+            except Exception:
+                pass
+        for day_key, buckets_summary in sorted(old_by_day.items()):
+            existing_arch[day_key] = {"date": day_key, "buckets": buckets_summary}
+            archived_days += 1
+        tmp_a = DAILY_ARCHIVE_FILE.with_suffix(".jsonl.tmp")
+        with tmp_a.open("w", encoding="utf-8") as fh:
+            for k in sorted(existing_arch.keys()):
+                fh.write(json.dumps(existing_arch[k], ensure_ascii=False) + "\n")
+        os.replace(tmp_a, DAILY_ARCHIVE_FILE)
+
+    tmp_s = SNAPSHOTS_FILE.with_suffix(".jsonl.tmp")
+    with tmp_s.open("w", encoding="utf-8") as fh:
+        for item in compacted:
+            fh.write(json.dumps(item, ensure_ascii=False) + "\n")
+    os.replace(tmp_s, SNAPSHOTS_FILE)
+    bytes_after = SNAPSHOTS_FILE.stat().st_size
+
+    return {
+        "before_lines": before_lines,
+        "after_lines": len(compacted),
+        "archived_days": archived_days,
+        "bytes_before": bytes_before,
+        "bytes_after": bytes_after,
+    }
+
+
+def rotate_web_log(max_bytes: int = 2 * 1024 * 1024, keep_bytes: int = 512 * 1024) -> int:
+    if not WEB_LOG_FILE.exists():
+        return 0
+    try:
+        sz = WEB_LOG_FILE.stat().st_size
+        if sz <= max_bytes:
+            return 0
+        with WEB_LOG_FILE.open("rb") as fh:
+            fh.seek(max(0, sz - keep_bytes))
+            tail = fh.read()
+        tmp = WEB_LOG_FILE.with_suffix(".log.tmp")
+        tmp.write_bytes(tail)
+        os.replace(tmp, WEB_LOG_FILE)
+        return sz - len(tail)
+    except Exception:
+        return 0
+
+
+def _dir_size(path: Path) -> int:
+    total = 0
+    if not path.exists():
+        return 0
+    if path.is_file():
+        try:
+            return path.stat().st_size
+        except Exception:
+            return 0
+    for root, _, files in os.walk(path):
+        for f in files:
+            try:
+                total += (Path(root) / f).stat().st_size
+            except Exception:
+                pass
+    return total
+
+
+def clean_cache(keep_days: int = 30, reset_index: bool = False, max_backups: int = 3) -> Dict[str, Any]:
+    """Prune and compact agy-usage's own cache, logs, stale index entries, and excess settings backups."""
+    global _DISK_INDEX_LOADED
+    ensure_data_dir()
+    before_total = _dir_size(DATA_DIR)
+
+    snap_res = compact_quota_snapshots(keep_days=keep_days)
+    log_freed = rotate_web_log(max_bytes=512 * 1024, keep_bytes=128 * 1024)
+
+    if reset_index:
+        _MEM_TRANSCRIPT_CACHE.clear()
+        _DISK_INDEX_LOADED = False
+        TRANSCRIPT_INDEX_FILE.unlink(missing_ok=True)
+    # Rebuild / prune orphan entries in transcript index
+    load_transcript_events()
+
+    backups_removed = 0
+    backups_freed = 0
+    if SETTINGS_FILE.parent.exists():
+        baks = sorted(
+            SETTINGS_FILE.parent.glob("settings.json.bak-agy-usage-*"),
+            key=lambda p: p.stat().st_mtime if p.exists() else 0,
+            reverse=True,
+        )
+        for old_bak in baks[max(0, max_backups) :]:
+            try:
+                backups_freed += old_bak.stat().st_size
+                old_bak.unlink()
+                backups_removed += 1
+            except Exception:
+                pass
+
+    after_total = _dir_size(DATA_DIR)
+    return {
+        "cache_dir": str(DATA_DIR),
+        "bytes_before": before_total,
+        "bytes_after": after_total,
+        "bytes_freed": max(0, before_total - after_total) + backups_freed + max(0, log_freed),
+        "snapshots": snap_res,
+        "index_entries": len(_MEM_TRANSCRIPT_CACHE),
+        "backups_removed": backups_removed,
+    }
+
+
+def run_doctor(stale_days: int = 30, prune_stale: bool = False) -> Dict[str, Any]:
+    """Inspect Antigravity & agy-usage storage health read-only; optionally prune stale sessions via official LS API."""
+    import urllib.request
+
+    now = datetime.now(timezone.utc)
+    stale_cutoff = now - timedelta(days=max(1, stale_days))
+    orphan_cutoff = now - timedelta(days=1)
+
+    meta = load_conversation_metadata()
+    agy_dirs = _discover_agy_dirs()
+
+    brain_Ids: Dict[str, Path] = {}
+    conv_db_sizes: Dict[str, int] = defaultdict(int)
+    total_agy_bytes = 0
+
+    for root in agy_dirs:
+        total_agy_bytes += _dir_size(root / "brain") + _dir_size(root / "conversations")
+        bdir = root / "brain"
+        if bdir.exists():
+            for d in bdir.iterdir():
+                if d.is_dir() and d.name not in brain_Ids:
+                    brain_Ids[d.name] = d
+        cdir = root / "conversations"
+        if cdir.exists():
+            for f in cdir.iterdir():
+                if f.is_file():
+                    cid_prefix = f.name.split(".db")[0]
+                    try:
+                        conv_db_sizes[cid_prefix] += f.stat().st_size
+                    except Exception:
+                        pass
+
+    empty_db_entries: List[Dict[str, Any]] = []
+    orphan_brain_dirs: List[Dict[str, Any]] = []
+    stale_sessions: List[Dict[str, Any]] = []
+
+    for cid, m in meta.items():
+        upd = parse_iso_dt(m.get("updated_at"))
+        has_transcript = cid in brain_Ids and (brain_Ids[cid] / ".system_generated/logs/transcript.jsonl").exists()
+        steps = int(m.get("step_count") or 0)
+        b_size = _dir_size(brain_Ids[cid]) if cid in brain_Ids else 0
+        total_sz = b_size + conv_db_sizes.get(cid, 0)
+
+        if steps == 0 and not has_transcript and (upd is None or upd < orphan_cutoff):
+            empty_db_entries.append(
+                {
+                    "id": cid,
+                    "short_id": cid[:8],
+                    "workspace": m.get("workspace") or "-",
+                    "bytes": total_sz,
+                }
+            )
+        elif upd is not None and upd < stale_cutoff:
+            stale_sessions.append(
+                {
+                    "id": cid,
+                    "short_id": cid[:8],
+                    "title": m.get("title") or "(未命名)",
+                    "workspace": m.get("workspace") or "-",
+                    "last_cst": fmt_cst(upd, "%Y-%m-%d %H:%M"),
+                    "age_days": int((now - upd).total_seconds() // 86400),
+                    "bytes": total_sz,
+                }
+            )
+
+    for cid, bpath in brain_Ids.items():
+        tfile = bpath / ".system_generated/logs/transcript.jsonl"
+        try:
+            mtime_dt = datetime.fromtimestamp(bpath.stat().st_mtime, tz=timezone.utc)
+        except Exception:
+            mtime_dt = now
+        if cid not in meta and not tfile.exists() and mtime_dt < orphan_cutoff:
+            orphan_brain_dirs.append(
+                {"id": cid, "short_id": cid[:8], "path": str(bpath), "bytes": _dir_size(bpath)}
+            )
+
+    stale_sessions.sort(key=lambda x: -x["bytes"])
+    empty_db_entries.sort(key=lambda x: -x["bytes"])
+
+    # Optional safe deletion ONLY via official Antigravity ConversationService HTTP API
+    ls_addr = os.environ.get("ANTIGRAVITY_LS_ADDRESS", "").strip()
+    csrf = os.environ.get("ANTIGRAVITY_CSRF_TOKEN", "").strip()
+    deleted_ids: List[str] = []
+    delete_errors: List[str] = []
+
+    if prune_stale and (stale_sessions or empty_db_entries):
+        if ls_addr and csrf:
+            targets = [x["id"] for x in empty_db_entries] + [x["id"] for x in stale_sessions]
+            url = f"http://{ls_addr}/product.v1.ConversationService/DeleteConversation"
+            for tid in targets:
+                try:
+                    req = urllib.request.Request(
+                        url,
+                        data=json.dumps({"conversationId": tid}).encode("utf-8"),
+                        headers={
+                            "Content-Type": "application/json",
+                            "Connect-Protocol-Version": "1",
+                            "x-antigravity-csrf-token": csrf,
+                        },
+                        method="POST",
+                    )
+                    urllib.request.urlopen(req, timeout=3.0).read()
+                    deleted_ids.append(tid[:8])
+                except Exception as exc:
+                    delete_errors.append(f"{tid[:8]}: {exc}")
+
+    own_cache_bytes = _dir_size(DATA_DIR)
+    return {
+        "agy_dirs": [str(p) for p in agy_dirs],
+        "total_agy_bytes": total_agy_bytes,
+        "own_cache_dir": str(DATA_DIR),
+        "own_cache_bytes": own_cache_bytes,
+        "index_cached_files": len(_MEM_TRANSCRIPT_CACHE),
+        "total_conversations": len(meta),
+        "empty_db_entries": empty_db_entries,
+        "orphan_brain_dirs": orphan_brain_dirs,
+        "stale_days": stale_days,
+        "stale_sessions": stale_sessions,
+        "ls_api_available": bool(ls_addr and csrf),
+        "deleted_ids": deleted_ids,
+        "delete_errors": delete_errors,
+    }
 
 
 def save_manual_quota(bucket: str, remaining_pct: float, reset_str: Optional[str] = None) -> Dict[str, Any]:

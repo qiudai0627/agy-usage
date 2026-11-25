@@ -33,6 +33,9 @@ env = dict(os.environ, AGY_USAGE_DATA_DIR=os.environ["TMPDATA"])
 cli = os.path.join(os.environ["SRC_DIR"], "cli.py")
 j = json.loads(subprocess.check_output([sys.executable, cli, "json", "-w", "7d"], env=env))
 assert j["quota"]["has_live_quota"] is True and len(j["quota"]["buckets"]) == 2
+assert os.path.exists(os.path.join(os.environ["TMPDATA"], "transcript_index.json")), "transcript_index.json not created"
+subprocess.check_call([sys.executable, cli, "clean", "--keep-days", "30"], env=env, stdout=subprocess.DEVNULL)
+subprocess.check_call([sys.executable, cli, "doctor", "--stale-days", "30"], env=env, stdout=subprocess.DEVNULL)
 p = subprocess.Popen([sys.executable, cli, "web", "--port", "18769", "--no-open"], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 try:
     for _ in range(25):

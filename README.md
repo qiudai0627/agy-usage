@@ -56,6 +56,8 @@ agy-usage                    # 终端即时完整报告（支持 -w 5h/today/24h
 agy-usage watch              # 终端实时刷新大屏（每 2s，适合 tmux 分屏）
 agy-usage daemon status      # 查看后台 Web 看板状态（start / stop / restart）
 agy-usage web                # 前台启动 Web 看板（默认 http://127.0.0.1:18420）
+agy-usage clean              # 压缩去重历史快照、轮转日志并清理孤儿缓存索引
+agy-usage doctor             # 体检存储占用、陈旧会话与空壳记录（支持 --prune-stale 官方接口安全清理）
 agy-usage json               # 导出结构化 JSON
 ```
 

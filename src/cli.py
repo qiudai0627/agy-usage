@@ -26,10 +26,13 @@ from core import (  # noqa: E402
     DATA_DIR,
     SETTINGS_FILE,
     build_analytics,
+    clean_cache,
     ensure_data_dir,
     export_sessions_csv,
     fmt_tokens,
     get_conversation_detail,
+    rotate_web_log,
+    run_doctor,
     save_manual_quota,
 )
 from web_ui import DASHBOARD_HTML  # noqa: E402
@@ -488,6 +491,7 @@ def cmd_daemon(args: argparse.Namespace) -> int:
             time.sleep(0.4)
             PID_FILE.unlink(missing_ok=True)
 
+        rotate_web_log()
         log_fh = LOG_FILE.open("ab")
         py_exe = sys.executable
         popen_kwargs: Dict[str, Any] = {"stdout": log_fh, "stderr": log_fh}
@@ -570,6 +574,86 @@ def cmd_uninstall_statusline(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _fmt_bytes(n: int) -> str:
+    v = float(max(0, n))
+    if v >= 1024 * 1024 * 1024:
+        return f"{v / (1024 ** 3):.2f} GB"
+    if v >= 1024 * 1024:
+        return f"{v / (1024 ** 2):.2f} MB"
+    if v >= 1024:
+        return f"{v / 1024:.1f} KB"
+    return f"{int(v)} B"
+
+
+def cmd_clean(args: argparse.Namespace) -> int:
+    res = clean_cache(
+        keep_days=int(args.keep_days),
+        reset_index=bool(args.reset_index),
+        max_backups=int(args.max_backups),
+    )
+    sn = res["snapshots"]
+    print(f"{BOLD}{CYAN}━━━ agy-usage 缓存瘦身与清理结果 ━━━{RESET}")
+    print(f"  缓存目录    : {res['cache_dir']}")
+    arch_hint = f" · 归档 {sn['archived_days']} 天" if sn["archived_days"] else ""
+    print(
+        f"  限额快照压缩: {sn['before_lines']} 行 -> {BOLD}{sn['after_lines']}{RESET} 行 "
+        f"({_fmt_bytes(sn['bytes_before'])} -> {_fmt_bytes(sn['bytes_after'])}{arch_hint})"
+    )
+    print(f"  增量索引缓存: 当前跟踪 {BOLD}{res['index_entries']}{RESET} 个活跃会话日志文件")
+    if res["backups_removed"] > 0:
+        print(f"  旧配置备份  : 已清理 {res['backups_removed']} 份多余 settings.json.bak 备份")
+    print(f"  {GREEN}✓ 共释放空间: {_fmt_bytes(res['bytes_freed'])}{RESET}（当前缓存总占用 {_fmt_bytes(res['bytes_after'])}）")
+    return 0
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    # First clean our own cache automatically
+    c_res = clean_cache(keep_days=30)
+    rep = run_doctor(stale_days=int(args.stale_days), prune_stale=bool(args.prune_stale))
+
+    print(f"{BOLD}{CYAN}━━━ Antigravity & agy-usage 数据健康体检 ━━━{RESET}")
+    print(f"  监控自有缓存: {_fmt_bytes(rep['own_cache_bytes'])} ({rep['own_cache_dir']})")
+    print(f"  增量缓存命中: 已索引 {rep['index_cached_files']} 个 transcript（每 3s 刷新仅增量读取变动文件）")
+    print(f"  AGY 数据总占: {BOLD}{_fmt_bytes(rep['total_agy_bytes'])}{RESET}（共登记 {rep['total_conversations']} 个会话）")
+
+    empty_cnt = len(rep["empty_db_entries"])
+    orphan_cnt = len(rep["orphan_brain_dirs"])
+    stale_cnt = len(rep["stale_sessions"])
+    stale_bytes = sum(x["bytes"] for x in rep["stale_sessions"])
+
+    print("")
+    print(f"{BOLD}【扫描明细（安全只读模式，不直接篡改 AGY SQLite 库）】{RESET}")
+    print(f"  • 空壳/零步数记录 : {empty_cnt} 条")
+    print(f"  • 孤儿 brain 目录 : {orphan_cnt} 个")
+    print(f"  • 超过 {rep['stale_days']} 天陈旧会话: {stale_cnt} 个（共占 {_fmt_bytes(stale_bytes)}）")
+
+    if rep["stale_sessions"]:
+        print(f"\n  {DIM}Top 陈旧大体积会话:{RESET}")
+        for s in rep["stale_sessions"][:8]:
+            print(
+                f"    {DIM}{s['short_id']}{RESET}  {_fmt_bytes(s['bytes']):>9}  "
+                f"{s['age_days']:>3}天前 ({s['last_cst']})  {trunc_display(s['title'], 32)}"
+            )
+
+    if args.prune_stale:
+        print("")
+        if rep["deleted_ids"]:
+            print(f"  {GREEN}✓ 已通过官方 ConversationService 安全清理 {len(rep['deleted_ids'])} 个失效/陈旧会话{RESET}")
+        elif not rep["ls_api_available"]:
+            print(
+                f"  {YELLOW}提示：当前不在 agy 内部会话环境中（未检测到 ANTIGRAVITY_LS_ADDRESS）。{RESET}\n"
+                f"  {DIM}为保护 conversation_summaries.db WAL 锁安全，外部终端不直接硬删 SQLite；可在 agy 会话内运行 `agy-usage doctor --prune-stale` 或用 `/delete` 安全清理老会话。{RESET}"
+            )
+        else:
+            print(f"  {GREEN}✓ 无需清理，未发现超期陈旧会话。{RESET}")
+    elif stale_cnt > 0 or empty_cnt > 0:
+        print(f"\n  {DIM}如需在 agy 内通过官方接口安全清理上述空壳与超期会话，可运行: agy-usage doctor --stale-days {rep['stale_days']} --prune-stale{RESET}")
+
+    if c_res["bytes_freed"] > 0:
+        print(f"  {GREEN}✓ 已顺手自动压缩自有快照缓存，释放 {_fmt_bytes(c_res['bytes_freed'])}{RESET}")
+    return 0
+
+
 def cmd_record_quota(args: argparse.Namespace) -> int:
     try:
         res = save_manual_quota(args.bucket, args.remaining_pct, args.reset)
@@ -624,6 +708,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_rec.add_argument("remaining_pct", type=float, help="剩余百分比（0~100）")
     p_rec.add_argument("--reset", help="重置时间（CST），如 '2026-12-02 08:00' 或 '12-02 08:00'")
 
+    p_clean = sub.add_parser("clean", help="压缩去重快照、轮转日志并清理孤儿缓存索引")
+    p_clean.add_argument("--keep-days", type=int, default=30, help="保留高频快照天数，超期自动按日归档（默认 30）")
+    p_clean.add_argument("--reset-index", action="store_true", help="清空并重建 transcript 增量索引缓存")
+    p_clean.add_argument("--max-backups", type=int, default=3, help="最多保留几份 settings.json 备份（默认 3）")
+
+    p_doc = sub.add_parser("doctor", help="体检存储占用、陈旧会话与空壳记录（支持官方接口安全清理）")
+    p_doc.add_argument("--stale-days", type=int, default=30, help="超过多少天未活跃视为陈旧会话（默认 30）")
+    p_doc.add_argument("--prune-stale", action="store_true", help="通过官方 ConversationService 接口安全删除空壳与超期会话")
+
     return p
 
 
@@ -648,6 +741,10 @@ def main() -> int:
         return cmd_uninstall_statusline(args)
     if args.cmd == "record-quota":
         return cmd_record_quota(args)
+    if args.cmd == "clean":
+        return cmd_clean(args)
+    if args.cmd == "doctor":
+        return cmd_doctor(args)
     return cmd_report(args)
 
 

@@ -11,9 +11,14 @@ import os
 import re
 import sqlite3
 from collections import Counter, defaultdict
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+import math
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+import tempfile
+import threading
+import time
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 CST = timezone(timedelta(hours=8))
 
@@ -51,8 +56,85 @@ DAILY_ARCHIVE_FILE = DATA_DIR / "quota_daily_archive.jsonl"
 WEB_LOG_FILE = DATA_DIR / "web.log"
 
 # Two-tier incremental cache: path -> (mtime_ns, size, parsed_events)
+_CACHE_LOCK = threading.RLock()
 _MEM_TRANSCRIPT_CACHE: Dict[str, Tuple[int, int, List[Dict[str, Any]]]] = {}
 _DISK_INDEX_LOADED: bool = False
+
+
+@contextmanager
+def file_lock(lock_path: Path, timeout: float = 2.0) -> Iterator[bool]:
+    """Cross-platform inter-process advisory lock (POSIX flock / Windows msvcrt)."""
+    ensure_data_dir()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(lock_path, "a+b")
+    locked = False
+    deadline = time.monotonic() + max(0.05, timeout)
+    try:
+        while True:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = True
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(0.015)
+        yield locked
+    finally:
+        if locked:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        fh.close()
+
+
+def atomic_replace(src: Path, dst: Path) -> None:
+    """Replace dst with src, retrying brief Windows sharing violations."""
+    delays = (0.01, 0.02, 0.04, 0.08, 0.12) if os.name == "nt" else ()
+    for d in delays:
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            time.sleep(d)
+    os.replace(src, dst)
+
+
+def atomic_write_text(path: Path, content: str, mode: Optional[int] = None) -> None:
+    """Write text to a unique sibling temp file, fsync, and atomically replace path."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+            fh.flush()
+            try:
+                os.fsync(fh.fileno())
+            except OSError:
+                pass
+        if mode is not None and os.name != "nt":
+            os.chmod(tmp_path, mode)
+        atomic_replace(tmp_path, path)
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
 
 # Reference list-price estimates (USD per 1M tokens) for rough cost & cache-savings estimation only.
 # Clearly labeled as "估算" in all UIs; actual billing depends on Antigravity subscription/credits.
@@ -283,44 +365,57 @@ def _hydrate_event_ts(ev: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return out
 
 
+def _safe_nonneg_int(val: Any) -> Optional[int]:
+    if val is None or isinstance(val, bool):
+        return 0 if val is None else None
+    try:
+        f = float(val)
+        if not math.isfinite(f) or f < 0:
+            return None
+        return int(f)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 def _load_disk_transcript_index() -> None:
     global _DISK_INDEX_LOADED
-    if _DISK_INDEX_LOADED:
-        return
-    _DISK_INDEX_LOADED = True
-    if not TRANSCRIPT_INDEX_FILE.exists():
-        return
-    try:
-        raw = json.loads(TRANSCRIPT_INDEX_FILE.read_text(encoding="utf-8"))
-        entries = raw.get("files") if isinstance(raw, dict) else None
-        if not isinstance(entries, dict):
+    with _CACHE_LOCK:
+        if _DISK_INDEX_LOADED:
             return
-        for path_str, info in entries.items():
-            if not isinstance(info, dict):
-                continue
-            mtime_ns = int(info.get("mtime_ns") or 0)
-            size = int(info.get("size") or 0)
-            evs = []
-            for item in info.get("events") or []:
-                if isinstance(item, dict):
-                    h = _hydrate_event_ts(item)
-                    if h is not None:
-                        evs.append(h)
-            _MEM_TRANSCRIPT_CACHE[path_str] = (mtime_ns, size, evs)
-    except Exception:
-        pass
+        if TRANSCRIPT_INDEX_FILE.exists():
+            try:
+                raw = json.loads(TRANSCRIPT_INDEX_FILE.read_text(encoding="utf-8"))
+                entries = raw.get("files") if isinstance(raw, dict) else None
+                if isinstance(entries, dict):
+                    for path_str, info in entries.items():
+                        if not isinstance(info, dict):
+                            continue
+                        mtime_ns = _safe_nonneg_int(info.get("mtime_ns")) or 0
+                        size = _safe_nonneg_int(info.get("size")) or 0
+                        evs = []
+                        for item in info.get("events") or []:
+                            if isinstance(item, dict):
+                                h = _hydrate_event_ts(item)
+                                if h is not None:
+                                    evs.append(h)
+                        _MEM_TRANSCRIPT_CACHE[path_str] = (mtime_ns, size, evs)
+            except Exception:
+                pass
+        _DISK_INDEX_LOADED = True
 
 
 def _save_disk_transcript_index() -> None:
     try:
         ensure_data_dir()
+        with _CACHE_LOCK:
+            snapshot_items = list(_MEM_TRANSCRIPT_CACHE.items())
         files_out: Dict[str, Any] = {}
-        for path_str, (mtime_ns, size, evs) in _MEM_TRANSCRIPT_CACHE.items():
+        for path_str, (mtime_ns, size, evs) in snapshot_items:
             serializable = [{k: v for k, v in e.items() if k != "ts"} for e in evs]
             files_out[path_str] = {"mtime_ns": mtime_ns, "size": size, "events": serializable}
-        tmp = TRANSCRIPT_INDEX_FILE.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps({"version": 1, "files": files_out}, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, TRANSCRIPT_INDEX_FILE)
+        payload = json.dumps({"version": 1, "files": files_out}, ensure_ascii=False)
+        with file_lock(TRANSCRIPT_INDEX_FILE.with_name(".index.lock"), timeout=1.5):
+            atomic_write_text(TRANSCRIPT_INDEX_FILE, payload)
     except Exception:
         pass
 
@@ -335,20 +430,26 @@ def _parse_single_transcript(p: Path, cid: str) -> List[Dict[str, Any]]:
                 d = json.loads(line)
             except Exception:
                 continue
+            if not isinstance(d, dict):
+                continue
             if "input_tokens" not in d and "output_tokens" not in d:
                 continue
             dt = parse_iso_dt(d.get("created_at"))
             if dt is None:
                 continue
-            in_tok = int(d.get("input_tokens") or 0)
-            cache_tok = int(d.get("cache_read_tokens") or 0)
-            out_tok = int(d.get("output_tokens") or 0)
-            model = d.get("model") or "unknown"
+            in_tok = _safe_nonneg_int(d.get("input_tokens"))
+            cache_tok = _safe_nonneg_int(d.get("cache_read_tokens"))
+            out_tok = _safe_nonneg_int(d.get("output_tokens"))
+            step_idx = _safe_nonneg_int(d.get("step_index"))
+            if in_tok is None or cache_tok is None or out_tok is None or step_idx is None:
+                continue
+            raw_model = d.get("model")
+            model = str(raw_model) if isinstance(raw_model, str) and raw_model.strip() else "unknown"
             tool_names = extract_tool_names(d.get("tool_calls"))
             file_events.append(
                 {
                     "conversation_id": cid,
-                    "step_index": int(d.get("step_index") or 0),
+                    "step_index": step_idx,
                     "ts": dt,
                     "ts_iso": dt.isoformat(),
                     "model": model,
@@ -394,23 +495,25 @@ def load_transcript_events() -> List[Dict[str, Any]]:
             active_paths.add(path_str)
             try:
                 st = p.stat()
-                cached = _MEM_TRANSCRIPT_CACHE.get(path_str)
+                with _CACHE_LOCK:
+                    cached = _MEM_TRANSCRIPT_CACHE.get(path_str)
                 if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
                     events.extend(cached[2])
                 else:
                     parsed = _parse_single_transcript(p, cid)
-                    _MEM_TRANSCRIPT_CACHE[path_str] = (st.st_mtime_ns, st.st_size, parsed)
+                    with _CACHE_LOCK:
+                        _MEM_TRANSCRIPT_CACHE[path_str] = (st.st_mtime_ns, st.st_size, parsed)
                     events.extend(parsed)
                     dirty = True
             except Exception:
                 continue
 
-    # Automatically evict deleted/orphan transcript paths from index
-    stale_keys = [k for k in list(_MEM_TRANSCRIPT_CACHE.keys()) if k not in active_paths]
-    if stale_keys:
-        for k in stale_keys:
-            del _MEM_TRANSCRIPT_CACHE[k]
-        dirty = True
+    with _CACHE_LOCK:
+        stale_keys = [k for k in list(_MEM_TRANSCRIPT_CACHE.keys()) if k not in active_paths]
+        if stale_keys:
+            for k in stale_keys:
+                _MEM_TRANSCRIPT_CACHE.pop(k, None)
+            dirty = True
 
     if dirty:
         _save_disk_transcript_index()
@@ -423,7 +526,8 @@ def load_live_state() -> Optional[Dict[str, Any]]:
     if not LIVE_STATE_FILE.exists():
         return None
     try:
-        return json.loads(LIVE_STATE_FILE.read_text(encoding="utf-8"))
+        d = json.loads(LIVE_STATE_FILE.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else None
     except Exception:
         return None
 
@@ -442,6 +546,8 @@ def load_quota_snapshots(max_age_days: int = 14) -> List[Dict[str, Any]]:
                     d = json.loads(line)
                 except Exception:
                     continue
+                if not isinstance(d, dict):
+                    continue
                 dt = parse_iso_dt(d.get("captured_at"))
                 if dt is None or dt < cutoff:
                     continue
@@ -456,19 +562,21 @@ def load_quota_snapshots(max_age_days: int = 14) -> List[Dict[str, Any]]:
 def infer_bucket_meta(bucket_id: str, reset_in_seconds: Optional[float]) -> Tuple[str, str, float, str, str]:
     """Return (chinese_label, window_kind, cycle_hours, pool_key, pool_desc)."""
     bid = bucket_id.lower()
-    is_weekly = (
-        "week" in bid
-        or "7d" in bid
-        or "seven" in bid
-        or (reset_in_seconds is not None and reset_in_seconds > 6 * 3600)
-    )
-    is_five_h = (
-        "5h" in bid
-        or "five" in bid
-        or "hour" in bid
-        or "short" in bid
-        or (not is_weekly and reset_in_seconds is not None and reset_in_seconds <= 6 * 3600)
-    )
+    explicit_weekly = "week" in bid or "7d" in bid or "seven" in bid
+    explicit_5h = "5h" in bid or "five" in bid or "hour" in bid or "short" in bid
+
+    if explicit_5h and not explicit_weekly:
+        is_five_h = True
+        is_weekly = False
+    elif explicit_weekly:
+        is_weekly = True
+        is_five_h = False
+    elif reset_in_seconds is not None:
+        is_weekly = reset_in_seconds > 6 * 3600
+        is_five_h = not is_weekly
+    else:
+        is_weekly = False
+        is_five_h = False
 
     if "3p" in bid or "claude" in bid or "anthropic" in bid or "gpt" in bid or "third" in bid:
         group = "Claude / GPT"
@@ -495,19 +603,35 @@ def infer_bucket_meta(bucket_id: str, reset_in_seconds: Optional[float]) -> Tupl
 
 
 def extract_remaining_fraction(entry: Dict[str, Any]) -> Optional[float]:
+    if not isinstance(entry, dict):
+        return None
     if "remaining_fraction" in entry and entry["remaining_fraction"] is not None:
         try:
             v = float(entry["remaining_fraction"])
+            if not math.isfinite(v):
+                return None
             return max(0.0, min(1.0, v))
         except Exception:
             return None
     if "remaining_percentage" in entry and entry["remaining_percentage"] is not None:
         try:
             v = float(entry["remaining_percentage"]) / 100.0
+            if not math.isfinite(v):
+                return None
             return max(0.0, min(1.0, v))
         except Exception:
             return None
     return None
+
+
+def _event_matches_bucket_pool(event_pool: str, bucket_pool_key: str) -> bool:
+    if bucket_pool_key == "claude_gpt":
+        return event_pool == "claude_gpt"
+    if bucket_pool_key == "gemini_flash":
+        return event_pool == "gemini_flash"
+    if bucket_pool_key == "gemini_pro":
+        return event_pool in ("gemini_pro", "gemini_flash")
+    return False
 
 
 def analyze_quota_buckets(
@@ -562,26 +686,34 @@ def analyze_quota_buckets(
             cycle_start_dt = reset_dt - timedelta(hours=cycle_hours)
             elapsed_h = max(0.0, (now - cycle_start_dt).total_seconds() / 3600.0)
             time_elapsed_pct = round(min(100.0, (elapsed_h / cycle_hours) * 100.0), 2)
-            if used_pct is not None and time_elapsed_pct > 0.5:
+            min_elapsed_h = 0.25 if window_kind == "five_hour" else 2.0
+            if not reset_passed and used_pct is not None and used_pct >= 1.0 and elapsed_h >= min_elapsed_h and time_elapsed_pct > 0.5:
                 pacing_ratio = round(used_pct / time_elapsed_pct, 2)
-            if rem_pct is not None and reset_in_sec is not None and reset_in_sec > 60:
+            if not reset_passed and rem_pct is not None and reset_in_sec is not None and reset_in_sec > 60:
                 rem_hours = reset_in_sec / 3600.0
                 hourly_safe_budget_pct = round(rem_pct / rem_hours, 2)
                 if window_kind == "weekly":
                     rem_days = max(0.25, rem_hours / 24.0)
                     daily_safe_budget_pct = round(min(rem_pct, rem_pct / rem_days), 1)
 
-        series: List[Dict[str, Any]] = []
+        raw_series: List[Dict[str, Any]] = []
         for s in snapshots:
-            q = (s.get("quota") or {}).get(bid)
+            q_map = s.get("quota")
+            if not isinstance(q_map, dict):
+                continue
+            q = q_map.get(bid)
             if not isinstance(q, dict):
                 continue
             rf = extract_remaining_fraction(q)
             if rf is None:
                 continue
-            if cycle_start_dt is not None and s["_dt"] < cycle_start_dt - timedelta(minutes=5):
+            snap_reset_dt = parse_iso_dt(q.get("reset_time"))
+            if reset_dt is not None and snap_reset_dt is not None:
+                if abs((snap_reset_dt - reset_dt).total_seconds()) > 120:
+                    continue
+            elif cycle_start_dt is not None and s["_dt"] < cycle_start_dt:
                 continue
-            series.append(
+            raw_series.append(
                 {
                     "ts": s["_dt"].isoformat(),
                     "ts_cst": fmt_cst(s["_dt"], "%m-%d %H:%M"),
@@ -591,13 +723,20 @@ def analyze_quota_buckets(
                 }
             )
 
+        # Segment at any quota reset drop (> 5% used_pct drop) so pre-reset samples never pollute new cycle
+        seg_start = 0
+        for idx in range(1, len(raw_series)):
+            if raw_series[idx]["used_pct"] < raw_series[idx - 1]["used_pct"] - 5.0:
+                seg_start = idx
+        series = raw_series[seg_start:]
+
         burn_pct_per_hour: Optional[float] = None
         tokens_per_1pct: Optional[float] = None
         projected_exhaust_hours: Optional[float] = None
         projected_rem_at_reset: Optional[float] = None
         burn_method = "none"
 
-        if len(series) >= 2:
+        if not reset_passed and len(series) >= 2:
             lookback_h = 5.0 if window_kind == "five_hour" else 24.0
             cutoff = now - timedelta(hours=lookback_h)
             recent = [pt for pt in series if pt["_dt"] >= cutoff]
@@ -606,18 +745,20 @@ def analyze_quota_buckets(
             first, last_pt = recent[0], recent[-1]
             dt_hours = (last_pt["_dt"] - first["_dt"]).total_seconds() / 3600.0
             delta_used = last_pt["used_pct"] - first["used_pct"]
-            if dt_hours >= 0.05 and delta_used > 0.01:
+            if dt_hours >= 0.05 and delta_used >= 0.05:
                 burn_pct_per_hour = round(delta_used / dt_hours, 3)
                 burn_method = "observed"
-                win_tokens = sum(
-                    e["billable_tokens"]
-                    for e in events
-                    if first["_dt"] <= e["ts"] <= last_pt["_dt"]
-                )
-                if win_tokens > 0:
-                    tokens_per_1pct = round(win_tokens / delta_used, 0)
+                if pool_key != "other":
+                    win_tokens = sum(
+                        e["billable_tokens"]
+                        for e in events
+                        if first["_dt"] <= e["ts"] <= last_pt["_dt"]
+                        and _event_matches_bucket_pool(e["pool"], pool_key)
+                    )
+                    if win_tokens > 0:
+                        tokens_per_1pct = round(win_tokens / delta_used, 0)
 
-        if burn_pct_per_hour is None and used_pct is not None and used_pct > 0.1 and cycle_start_dt is not None:
+        if not reset_passed and burn_pct_per_hour is None and used_pct is not None and used_pct > 0.1 and cycle_start_dt is not None:
             elapsed_h = (now - cycle_start_dt).total_seconds() / 3600.0
             if elapsed_h >= 0.25:
                 burn_pct_per_hour = round(used_pct / elapsed_h, 3)
@@ -1097,7 +1238,6 @@ def build_analytics(window: str = "7d") -> Dict[str, Any]:
         "configured_planner": (settings.get("orchestrator") or {}).get("planner") or "-",
         "agent_state": (live_state or {}).get("agent_state") or "-",
         "plan_tier": (live_state or {}).get("plan_tier") or "-",
-        "email": (live_state or {}).get("email") or "-",
         "version": (live_state or {}).get("version") or "-",
         "active_model": ((live_state or {}).get("model") or {}).get("display_name")
         or settings.get("model")
@@ -1163,60 +1303,27 @@ def get_conversation_detail(conv_id: str) -> Optional[Dict[str, Any]]:
     tool_counter: Counter = Counter()
     events: List[Dict[str, Any]] = []
 
-    with target_file.open("r", encoding="utf-8", errors="replace") as fh:
-        for line in fh:
-            if not line.strip():
-                continue
-            try:
-                d = json.loads(line)
-            except Exception:
-                continue
-            if "input_tokens" not in d and "output_tokens" not in d:
-                continue
-            dt = parse_iso_dt(d.get("created_at"))
-            if dt is None:
-                continue
-            in_tok = int(d.get("input_tokens") or 0)
-            cache_tok = int(d.get("cache_read_tokens") or 0)
-            out_tok = int(d.get("output_tokens") or 0)
-            model = d.get("model") or "unknown"
-            tool_names = extract_tool_names(d.get("tool_calls"))
-            for tn in tool_names:
-                tool_counter[tn] += 1
-            ev = {
-                "conversation_id": matched_id,
-                "step_index": int(d.get("step_index") or 0),
-                "ts": dt,
-                "model": model,
-                "pool": classify_model_pool(model),
-                "input_tokens": in_tok,
-                "cache_read_tokens": cache_tok,
-                "output_tokens": out_tok,
-                "total_tokens": in_tok + cache_tok + out_tok,
-                "billable_tokens": in_tok + out_tok,
-                "context_size": in_tok + cache_tok,
-                "est_cost_usd": estimate_cost_usd(model, in_tok, cache_tok, out_tok),
-                "cache_saved_usd": estimate_cache_saved_usd(model, cache_tok),
-                "tool_count": len(tool_names),
-                "tool_names": tool_names,
+    parsed_events = _parse_single_transcript(target_file, matched_id)
+    for ev in parsed_events:
+        for tn in ev["tool_names"]:
+            tool_counter[tn] += 1
+        events.append(ev)
+        turns.append(
+            {
+                "turn": len(turns) + 1,
+                "step_index": ev["step_index"],
+                "ts_cst": fmt_cst(ev["ts"], "%m-%d %H:%M:%S"),
+                "model": ev["model"],
+                "pool": ev["pool"],
+                "input_tokens": ev["input_tokens"],
+                "cache_read_tokens": ev["cache_read_tokens"],
+                "output_tokens": ev["output_tokens"],
+                "context_size": ev["context_size"],
+                "billable_tokens": ev["billable_tokens"],
+                "est_cost_usd": round(ev["est_cost_usd"], 4),
+                "tool_names": ev["tool_names"],
             }
-            events.append(ev)
-            turns.append(
-                {
-                    "turn": len(turns) + 1,
-                    "step_index": ev["step_index"],
-                    "ts_cst": fmt_cst(dt, "%m-%d %H:%M:%S"),
-                    "model": model,
-                    "pool": ev["pool"],
-                    "input_tokens": in_tok,
-                    "cache_read_tokens": cache_tok,
-                    "output_tokens": out_tok,
-                    "context_size": in_tok + cache_tok,
-                    "billable_tokens": in_tok + out_tok,
-                    "est_cost_usd": round(ev["est_cost_usd"], 4),
-                    "tool_names": tool_names,
-                }
-            )
+        )
 
     summary = summarize_events(events)
     return {
@@ -1230,6 +1337,12 @@ def get_conversation_detail(conv_id: str) -> Optional[Dict[str, Any]]:
         "tools": [{"name": k, "count": v} for k, v in tool_counter.most_common(12)],
         "turns": turns,
     }
+
+
+def _safe_csv_cell(val: Any) -> Any:
+    if isinstance(val, str) and val and val[0] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + val
+    return val
 
 
 def export_sessions_csv(window: str = "7d") -> str:
@@ -1259,11 +1372,11 @@ def export_sessions_csv(window: str = "7d") -> str:
     for c in data["conversations"]:
         w.writerow(
             [
-                c["id"],
-                c["title"],
-                c["workspace"],
+                _safe_csv_cell(c["id"]),
+                _safe_csv_cell(c["title"]),
+                _safe_csv_cell(c["workspace"]),
                 "是" if c["is_subagent"] else "否",
-                "; ".join(c["models"]),
+                _safe_csv_cell("; ".join(c["models"])),
                 c["calls"],
                 c["input_tokens"],
                 c["cache_read_tokens"],
@@ -1279,6 +1392,10 @@ def export_sessions_csv(window: str = "7d") -> str:
     return buf.getvalue()
 
 
+def _snapshots_lock_path() -> Path:
+    return SNAPSHOTS_FILE.with_name(".snapshots.lock")
+
+
 def record_quota_snapshot(
     quota_obj: Dict[str, Any],
     source: str = "manual",
@@ -1286,71 +1403,79 @@ def record_quota_snapshot(
     force: bool = False,
 ) -> bool:
     ensure_data_dir()
+    if not quota_obj:
+        return False
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat()
 
-    should_append = force
-    if not should_append:
-        last_snap = None
-        if SNAPSHOTS_FILE.exists():
-            try:
-                with SNAPSHOTS_FILE.open("rb") as fh:
-                    fh.seek(0, os.SEEK_END)
-                    size = fh.tell()
-                    fh.seek(max(0, size - 4096))
-                    lines = fh.read().decode("utf-8", errors="replace").splitlines()
-                    if lines:
-                        last_snap = json.loads(lines[-1])
-            except Exception:
-                last_snap = None
-        if last_snap is None:
-            should_append = True
-        else:
-            last_dt = parse_iso_dt(last_snap.get("captured_at"))
-            last_q = last_snap.get("quota") or {}
-            def _sig(q: Dict[str, Any]) -> Dict[str, Any]:
-                return {
-                    k: (v.get("remaining_fraction"), v.get("reset_time"))
-                    for k, v in q.items()
-                    if isinstance(v, dict)
-                }
-            if last_dt is None or (now - last_dt).total_seconds() >= 120:
-                should_append = True
-            elif _sig(last_q) != _sig(quota_obj):
-                should_append = True
+    with file_lock(_snapshots_lock_path(), timeout=1.5) as locked:
+        if not locked and not force:
+            return False
 
-    if should_append and quota_obj:
-        rec: Dict[str, Any] = {
-            "captured_at": now_iso,
-            "source": source,
-            "quota": quota_obj,
-        }
-        if extra:
-            rec.update(extra)
-        with SNAPSHOTS_FILE.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
-        # Auto-rotate & compact when snapshots file exceeds 512 KB
-        try:
-            if SNAPSHOTS_FILE.stat().st_size > 512 * 1024:
-                compact_quota_snapshots(keep_days=30)
-        except Exception:
-            pass
-    return should_append
+        should_append = force
+        if not should_append:
+            last_snap = None
+            if SNAPSHOTS_FILE.exists():
+                try:
+                    with SNAPSHOTS_FILE.open("rb") as fh:
+                        fh.seek(0, os.SEEK_END)
+                        size = fh.tell()
+                        fh.seek(max(0, size - 4096))
+                        lines = fh.read().decode("utf-8", errors="replace").splitlines()
+                        for raw_ln in reversed(lines):
+                            if not raw_ln.strip():
+                                continue
+                            try:
+                                cand = json.loads(raw_ln)
+                                if isinstance(cand, dict):
+                                    last_snap = cand
+                                    break
+                            except Exception:
+                                continue
+                except Exception:
+                    last_snap = None
+            if last_snap is None:
+                should_append = True
+            else:
+                last_dt = parse_iso_dt(last_snap.get("captured_at"))
+                last_q = last_snap.get("quota") or {}
+                if last_dt is None or (now - last_dt).total_seconds() >= 120:
+                    should_append = True
+                elif _quota_sig(last_q) != _quota_sig(quota_obj):
+                    should_append = True
+
+        if should_append:
+            rec: Dict[str, Any] = {
+                "captured_at": now_iso,
+                "source": source,
+                "quota": quota_obj,
+            }
+            if extra:
+                rec.update(extra)
+            with SNAPSHOTS_FILE.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                fh.flush()
+            try:
+                if SNAPSHOTS_FILE.stat().st_size > 512 * 1024:
+                    _compact_quota_snapshots_unlocked(keep_days=30)
+            except Exception:
+                pass
+        return should_append
 
 
 def _quota_sig(q: Any) -> str:
     if not isinstance(q, dict):
         return ""
-    slim = {
-        k: (round(float(v.get("remaining_fraction")), 4) if v.get("remaining_fraction") is not None else None, v.get("reset_time"))
-        for k, v in sorted(q.items())
-        if isinstance(v, dict)
-    }
+    slim = {}
+    for k, v in sorted(q.items()):
+        if not isinstance(v, dict):
+            continue
+        rf = extract_remaining_fraction(v)
+        slim[k] = (round(rf, 4) if rf is not None else None, v.get("reset_time"))
     return json.dumps(slim, sort_keys=True)
 
 
-def compact_quota_snapshots(keep_days: int = 30) -> Dict[str, int]:
-    """Deduplicate flat runs in quota_snapshots.jsonl and archive entries older than keep_days."""
+def _compact_quota_snapshots_unlocked(keep_days: int = 30) -> Dict[str, int]:
     if not SNAPSHOTS_FILE.exists():
         return {"before_lines": 0, "after_lines": 0, "archived_days": 0, "bytes_before": 0, "bytes_after": 0}
 
@@ -1370,12 +1495,17 @@ def compact_quota_snapshots(keep_days: int = 30) -> Dict[str, int]:
                 d = json.loads(line)
             except Exception:
                 continue
+            if not isinstance(d, dict):
+                continue
             dt = parse_iso_dt(d.get("captured_at"))
             if dt is None:
                 continue
             if dt < cutoff:
                 day_key = dt.astimezone(CST).strftime("%Y-%m-%d")
-                for bid, bval in (d.get("quota") or {}).items():
+                q_map = d.get("quota")
+                if not isinstance(q_map, dict):
+                    continue
+                for bid, bval in q_map.items():
                     if not isinstance(bval, dict):
                         continue
                     rf = extract_remaining_fraction(bval)
@@ -1391,40 +1521,46 @@ def compact_quota_snapshots(keep_days: int = 30) -> Dict[str, int]:
             else:
                 kept_raw.append(d)
 
-    # Deduplicate middle points of identical flat runs (keep endpoints of each run)
     compacted: List[Dict[str, Any]] = []
     sigs = [_quota_sig(x.get("quota")) for x in kept_raw]
     for i, item in enumerate(kept_raw):
         if i == 0 or i == len(kept_raw) - 1 or sigs[i] != sigs[i - 1] or sigs[i] != sigs[i + 1]:
             compacted.append(item)
 
-    # Merge archived days into DAILY_ARCHIVE_FILE
     archived_days = 0
     if old_by_day:
         existing_arch: Dict[str, Any] = {}
         if DAILY_ARCHIVE_FILE.exists():
-            try:
-                for line in DAILY_ARCHIVE_FILE.read_text(encoding="utf-8", errors="replace").splitlines():
-                    if line.strip():
-                        row = json.loads(line)
-                        if row.get("date"):
-                            existing_arch[row["date"]] = row
-            except Exception:
-                pass
+            for line in DAILY_ARCHIVE_FILE.read_text(encoding="utf-8", errors="replace").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                    if isinstance(row, dict) and isinstance(row.get("date"), str):
+                        existing_arch[row["date"]] = row
+                except Exception:
+                    continue
         for day_key, buckets_summary in sorted(old_by_day.items()):
-            existing_arch[day_key] = {"date": day_key, "buckets": buckets_summary}
+            prev = existing_arch.get(day_key)
+            prev_buckets = prev.get("buckets") if isinstance(prev, dict) and isinstance(prev.get("buckets"), dict) else {}
+            merged_buckets = dict(prev_buckets)
+            for bid, b_stat in buckets_summary.items():
+                old_b = merged_buckets.get(bid)
+                if isinstance(old_b, dict) and old_b.get("min_rem") is not None:
+                    merged_buckets[bid] = {
+                        "min_rem": min(float(old_b["min_rem"]), b_stat["min_rem"]),
+                        "last_rem": b_stat["last_rem"],
+                        "samples": int(old_b.get("samples") or 0) + b_stat["samples"],
+                    }
+                else:
+                    merged_buckets[bid] = b_stat
+            existing_arch[day_key] = {"date": day_key, "buckets": merged_buckets}
             archived_days += 1
-        tmp_a = DAILY_ARCHIVE_FILE.with_suffix(".jsonl.tmp")
-        with tmp_a.open("w", encoding="utf-8") as fh:
-            for k in sorted(existing_arch.keys()):
-                fh.write(json.dumps(existing_arch[k], ensure_ascii=False) + "\n")
-        os.replace(tmp_a, DAILY_ARCHIVE_FILE)
+        arch_text = "".join(json.dumps(existing_arch[k], ensure_ascii=False) + "\n" for k in sorted(existing_arch.keys()))
+        atomic_write_text(DAILY_ARCHIVE_FILE, arch_text)
 
-    tmp_s = SNAPSHOTS_FILE.with_suffix(".jsonl.tmp")
-    with tmp_s.open("w", encoding="utf-8") as fh:
-        for item in compacted:
-            fh.write(json.dumps(item, ensure_ascii=False) + "\n")
-    os.replace(tmp_s, SNAPSHOTS_FILE)
+    snap_text = "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in compacted)
+    atomic_write_text(SNAPSHOTS_FILE, snap_text)
     bytes_after = SNAPSHOTS_FILE.stat().st_size
 
     return {
@@ -1434,6 +1570,13 @@ def compact_quota_snapshots(keep_days: int = 30) -> Dict[str, int]:
         "bytes_before": bytes_before,
         "bytes_after": bytes_after,
     }
+
+
+def compact_quota_snapshots(keep_days: int = 30) -> Dict[str, int]:
+    """Thread/process-safe wrapper around snapshot compaction and daily archiving."""
+    ensure_data_dir()
+    with file_lock(_snapshots_lock_path(), timeout=3.0):
+        return _compact_quota_snapshots_unlocked(keep_days=keep_days)
 
 
 def rotate_web_log(max_bytes: int = 2 * 1024 * 1024, keep_bytes: int = 512 * 1024) -> int:
@@ -1479,13 +1622,22 @@ def clean_cache(keep_days: int = 30, reset_index: bool = False, max_backups: int
     before_total = _dir_size(DATA_DIR)
 
     snap_res = compact_quota_snapshots(keep_days=keep_days)
-    log_freed = rotate_web_log(max_bytes=512 * 1024, keep_bytes=128 * 1024)
+    rotate_web_log(max_bytes=512 * 1024, keep_bytes=128 * 1024)
+
+    # Remove stale *.tmp files older than 10 minutes inside DATA_DIR
+    now_epoch = time.time()
+    for tmp_f in DATA_DIR.glob("*.tmp"):
+        try:
+            if now_epoch - tmp_f.stat().st_mtime > 600:
+                tmp_f.unlink()
+        except OSError:
+            pass
 
     if reset_index:
-        _MEM_TRANSCRIPT_CACHE.clear()
-        _DISK_INDEX_LOADED = False
+        with _CACHE_LOCK:
+            _MEM_TRANSCRIPT_CACHE.clear()
+            _DISK_INDEX_LOADED = False
         TRANSCRIPT_INDEX_FILE.unlink(missing_ok=True)
-    # Rebuild / prune orphan entries in transcript index
     load_transcript_events()
 
     backups_removed = 0
@@ -1505,13 +1657,15 @@ def clean_cache(keep_days: int = 30, reset_index: bool = False, max_backups: int
                 pass
 
     after_total = _dir_size(DATA_DIR)
+    with _CACHE_LOCK:
+        idx_cnt = len(_MEM_TRANSCRIPT_CACHE)
     return {
         "cache_dir": str(DATA_DIR),
         "bytes_before": before_total,
         "bytes_after": after_total,
-        "bytes_freed": max(0, before_total - after_total) + backups_freed + max(0, log_freed),
+        "bytes_freed": max(0, before_total - after_total) + backups_freed,
         "snapshots": snap_res,
-        "index_entries": len(_MEM_TRANSCRIPT_CACHE),
+        "index_entries": idx_cnt,
         "backups_removed": backups_removed,
     }
 
@@ -1686,11 +1840,10 @@ def save_manual_quota(bucket: str, remaining_pct: float, reset_str: Optional[str
     existing_quota[bucket.strip()] = entry
 
     record_quota_snapshot(existing_quota, source="manual", force=True)
-    state = dict(existing_state)
+    state = {k: v for k, v in existing_state.items() if k != "email"}
     state["captured_at"] = datetime.now(timezone.utc).isoformat()
     state["source"] = "manual"
     state["quota"] = existing_quota
-    tmp = LIVE_STATE_FILE.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, LIVE_STATE_FILE)
+    with file_lock(LIVE_STATE_FILE.with_name(".state.lock"), timeout=1.5):
+        atomic_write_text(LIVE_STATE_FILE, json.dumps(state, ensure_ascii=False, indent=2))
     return {"ok": True, "bucket": bucket.strip(), "remaining_pct": rem_pct, "reset_time": reset_iso}

@@ -60,12 +60,12 @@ def bar(pct: float, width: int = 20, color: str = CYAN) -> str:
     return f"{color}{'█' * filled}{DIM}{'░' * (width - filled)}{RESET}"
 
 
-def rem_color(rem_pct: Optional[float]) -> str:
-    if rem_pct is None:
+def used_bar_color(used_pct: Optional[float]) -> str:
+    if used_pct is None:
         return DIM
-    if rem_pct <= 15:
+    if used_pct >= 80.0:
         return RED
-    if rem_pct <= 35:
+    if used_pct >= 55.0:
         return YELLOW
     return GREEN
 
@@ -154,7 +154,7 @@ def render_terminal_report(data: Dict[str, Any], compact: bool = False) -> str:
         for b in q["buckets"]:
             rem = b["remaining_pct"] if b["remaining_pct"] is not None else 0.0
             used = b["used_pct"] if b["used_pct"] is not None else 0.0
-            col = rem_color(rem)
+            col = CYAN if b["status"] == "reset_ready" else used_bar_color(used)
             status_tag = (
                 f"{CYAN}[已到期待刷新]{RESET}"
                 if b["status"] == "reset_ready"
@@ -165,7 +165,7 @@ def render_terminal_report(data: Dict[str, Any], compact: bool = False) -> str:
                 else f"{GREEN}[健康]{RESET}"
             )
             lines.append(
-                f"  {BOLD}{pad_display(b['label'], 26)}{RESET} {bar(rem, 16, col)} "
+                f"  {BOLD}{pad_display(b['label'], 26)}{RESET} {bar(used, 16, col)} "
                 f"{col}{BOLD}已用 {used:5.1f}%{RESET} {DIM}(剩 {rem:5.1f}%){RESET} {status_tag}  "
                 f"重置: {CYAN}{b['reset_time_cst']}{RESET} {DIM}({b['reset_in_text']}){RESET}"
             )
@@ -312,7 +312,21 @@ def cmd_watch(args: argparse.Namespace) -> int:
         return 0
 
 
-def make_handler() -> type:
+def make_handler(port: int) -> type:
+    allowed_hosts = {
+        f"127.0.0.1:{port}",
+        f"localhost:{port}",
+        f"[::1]:{port}",
+        "127.0.0.1",
+        "localhost",
+        "[::1]",
+    }
+    allowed_origins = {
+        f"http://127.0.0.1:{port}",
+        f"http://localhost:{port}",
+        f"http://[::1]:{port}",
+    }
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt: str, *log_args: Any) -> None:
             return
@@ -321,6 +335,8 @@ def make_handler() -> type:
             self.send_response(code)
             self.send_header("Content-Type", content_type)
             self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
             self.send_header("Content-Length", str(len(body)))
             if extra_headers:
                 for k, v in extra_headers.items():
@@ -328,7 +344,29 @@ def make_handler() -> type:
             self.end_headers()
             self.wfile.write(body)
 
+        def _check_host_and_origin(self, is_write: bool = False) -> bool:
+            host_hdr = (self.headers.get("Host") or "").strip().lower()
+            if host_hdr not in allowed_hosts:
+                self._send(403, "application/json; charset=utf-8", b'{"ok":false,"error":"forbidden host"}')
+                return False
+            if is_write:
+                ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+                if ctype != "application/json":
+                    self._send(415, "application/json; charset=utf-8", b'{"ok":false,"error":"application/json required"}')
+                    return False
+                origin = (self.headers.get("Origin") or "").strip().lower()
+                if origin and origin not in allowed_origins:
+                    self._send(403, "application/json; charset=utf-8", b'{"ok":false,"error":"forbidden origin"}')
+                    return False
+                fetch_site = (self.headers.get("Sec-Fetch-Site") or "").strip().lower()
+                if fetch_site and fetch_site not in ("same-origin", "none"):
+                    self._send(403, "application/json; charset=utf-8", b'{"ok":false,"error":"forbidden fetch-site"}')
+                    return False
+            return True
+
         def do_GET(self) -> None:
+            if not self._check_host_and_origin(is_write=False):
+                return
             parsed = urlparse(self.path)
             path = parsed.path
             qs = parse_qs(parsed.query)
@@ -368,12 +406,23 @@ def make_handler() -> type:
             self._send(404, "text/plain; charset=utf-8", b"Not Found")
 
         def do_POST(self) -> None:
+            if not self._check_host_and_origin(is_write=True):
+                return
             parsed = urlparse(self.path)
             if parsed.path == "/api/record-quota":
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    raw = self.rfile.read(min(length, 16384)).decode("utf-8")
+                    raw_len = self.headers.get("Content-Length")
+                    if raw_len is None:
+                        self._send(400, "application/json; charset=utf-8", b'{"ok":false,"error":"missing content-length"}')
+                        return
+                    length = int(raw_len)
+                    if length <= 0 or length > 16384:
+                        self._send(413, "application/json; charset=utf-8", b'{"ok":false,"error":"payload size invalid"}')
+                        return
+                    raw = self.rfile.read(length).decode("utf-8")
                     payload = json.loads(raw)
+                    if not isinstance(payload, dict):
+                        raise ValueError("JSON object required")
                     res = save_manual_quota(
                         bucket=str(payload.get("bucket") or "gemini-weekly"),
                         remaining_pct=float(payload.get("remaining_pct")),
@@ -438,7 +487,7 @@ class ReusableHTTPServer(ThreadingHTTPServer):
 def cmd_web(args: argparse.Namespace) -> int:
     host = "127.0.0.1"
     port = int(args.port)
-    server = ReusableHTTPServer((host, port), make_handler())
+    server = ReusableHTTPServer((host, port), make_handler(port))
     url = f"http://{host}:{port}"
     print(f"{GREEN}●{RESET} Antigravity 实时用量监控台已启动: {BOLD}{CYAN}{url}{RESET}", flush=True)
     print(f"  {DIM}仅监听本机 127.0.0.1 · 按 Ctrl+C 停止服务{RESET}", flush=True)
@@ -568,7 +617,8 @@ def cmd_uninstall_statusline(_args: argparse.Namespace) -> int:
     del cfg["statusLine"]
     tmp = SETTINGS_FILE.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    os.chmod(tmp, 0o600)
+    if os.name != "nt":
+        os.chmod(tmp, 0o600)
     os.replace(tmp, SETTINGS_FILE)
     print(f"{GREEN}✓ 已移除 statusLine 配置{RESET}（原配置备份于 {backup}）")
     return 0

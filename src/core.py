@@ -1,0 +1,1300 @@
+#!/usr/bin/env python3
+"""Core data ingestion, quota telemetry, and deep analytics engine for Antigravity CLI (agy)."""
+
+from __future__ import annotations
+
+import csv
+import glob
+import io
+import json
+import os
+import re
+import sqlite3
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+CST = timezone(timedelta(hours=8))
+
+def _default_data_dir() -> Path:
+    if os.name == "nt":
+        base = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData/Local"))
+        return base / "agy-usage"
+    return Path.home() / ".cache/agy-usage"
+
+
+def _discover_agy_dirs() -> List[Path]:
+    explicit = os.environ.get("AGY_DATA_DIR")
+    if explicit:
+        return [Path(explicit)]
+    candidates = [
+        Path.home() / ".gemini/antigravity-cli",
+        Path.home() / ".gemini/antigravity",
+    ]
+    found = [p for p in candidates if p.exists()]
+    return found if found else [candidates[0]]
+
+
+AGY_DIR = Path(os.environ.get("AGY_DATA_DIR", str(Path.home() / ".gemini/antigravity-cli")))
+BRAIN_DIR = AGY_DIR / "brain"
+SUMMARY_DB = AGY_DIR / "conversation_summaries.db"
+META_CACHE = AGY_DIR / "cache/conversation_metadata.json"
+SETTINGS_FILE = AGY_DIR / "settings.json"
+
+APP_DIR = Path(__file__).resolve().parent
+DATA_DIR = Path(os.environ.get("AGY_USAGE_DATA_DIR", str(_default_data_dir())))
+LIVE_STATE_FILE = DATA_DIR / "live_state.json"
+SNAPSHOTS_FILE = DATA_DIR / "quota_snapshots.jsonl"
+
+# Reference list-price estimates (USD per 1M tokens) for rough cost & cache-savings estimation only.
+# Clearly labeled as "估算" in all UIs; actual billing depends on Antigravity subscription/credits.
+MODEL_PRICING_PER_1M: Dict[str, Tuple[float, float, float]] = {
+    # (fresh_input, cache_read, output)
+    "gemini-4-neon": (2.50, 0.25, 15.00),
+    "gemini-4-carbon": (1.50, 0.15, 10.00),
+    "gemini-4-argon": (1.25, 0.125, 8.00),
+    "gemini-4-hydrogen": (2.00, 0.20, 12.00),
+    "gemini-pro-orchestrator": (2.50, 0.25, 15.00),
+    "gemini-3.8-flash": (0.30, 0.03, 2.50),
+    "claude-opus-5-5": (15.00, 1.50, 75.00),
+    "claude-sonnet-5-5": (3.00, 0.30, 15.00),
+    "gpt-oss-120b": (1.00, 0.10, 4.00),
+}
+
+POOL_LABELS: Dict[str, str] = {
+    "gemini_pro": "Gemini Pro / 旗舰系列",
+    "gemini_flash": "Gemini Flash 轻量系列",
+    "claude_gpt": "Claude / GPT 第三方系列",
+    "other": "其他 / 未知模型",
+}
+
+
+def ensure_data_dir() -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def parse_iso_dt(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    s = str(value).strip()
+    if not s or s.startswith("0001-01-01"):
+        return None
+    try:
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        s = re.sub(r"(\.\d{6})\d+", r"\1", s)
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def fmt_cst(dt: Optional[datetime], fmt: str = "%m-%d %H:%M") -> str:
+    if dt is None:
+        return "-"
+    return dt.astimezone(CST).strftime(fmt)
+
+
+def fmt_duration(seconds: Optional[float]) -> str:
+    if seconds is None:
+        return "-"
+    sec = int(max(0, round(seconds)))
+    days, rem = divmod(sec, 86400)
+    hours, rem = divmod(rem, 3600)
+    mins, secs = divmod(rem, 60)
+    if days > 0:
+        return f"{days}天{hours}小时"
+    if hours > 0:
+        return f"{hours}小时{mins}分"
+    if mins > 0:
+        return f"{mins}分{secs}秒"
+    return f"{secs}秒"
+
+
+def fmt_tokens(n: float) -> str:
+    n = float(n or 0)
+    if abs(n) >= 1_000_000_000:
+        return f"{n / 1_000_000_000:.2f}B"
+    if abs(n) >= 1_000_000:
+        return f"{n / 1_000_000:.2f}M"
+    if abs(n) >= 1_000:
+        return f"{n / 1_000:.1f}k"
+    return f"{int(round(n))}"
+
+
+def classify_model_pool(model: Optional[str]) -> str:
+    m = (model or "").lower()
+    if not m or m == "unknown":
+        return "other"
+    if "flash" in m:
+        return "gemini_flash"
+    if "claude" in m or "gpt" in m or "opus" in m or "sonnet" in m:
+        return "claude_gpt"
+    if "gemini" in m or "orchestrator" in m:
+        return "gemini_pro"
+    return "other"
+
+
+def get_model_rates(model: Optional[str]) -> Tuple[float, float, float]:
+    m = (model or "").lower()
+    for prefix, r in MODEL_PRICING_PER_1M.items():
+        if prefix in m:
+            return r
+    return (1.50, 0.15, 10.00)
+
+
+def estimate_cost_usd(
+    model: Optional[str],
+    input_tokens: int,
+    cache_read_tokens: int,
+    output_tokens: int,
+) -> float:
+    in_r, cache_r, out_r = get_model_rates(model)
+    return (
+        (input_tokens / 1_000_000.0) * in_r
+        + (cache_read_tokens / 1_000_000.0) * cache_r
+        + (output_tokens / 1_000_000.0) * out_r
+    )
+
+
+def estimate_cache_saved_usd(model: Optional[str], cache_read_tokens: int) -> float:
+    in_r, cache_r, _ = get_model_rates(model)
+    return (cache_read_tokens / 1_000_000.0) * max(0.0, in_r - cache_r)
+
+
+def shorten_workspace(uris: List[str]) -> str:
+    if not uris:
+        return "(无工作区)"
+    u = uris[0]
+    if u.startswith("file://"):
+        u = u[7:]
+    home = str(Path.home())
+    if u == home:
+        return "~"
+    if u.startswith(home + "/"):
+        rel = u[len(home) + 1 :]
+        parts = rel.split("/")
+        return parts[-1] if len(parts) > 1 else f"~/{rel}"
+    return Path(u).name or u
+
+
+def extract_tool_names(tool_calls: Any) -> List[str]:
+    names: List[str] = []
+    if not isinstance(tool_calls, list):
+        return names
+    for tc in tool_calls:
+        if isinstance(tc, dict):
+            name = tc.get("name") or (tc.get("function") or {}).get("name") or tc.get("tool_name")
+            if name:
+                names.append(str(name))
+        elif isinstance(tc, str):
+            names.append(tc)
+    return names
+
+
+def load_conversation_metadata() -> Dict[str, Dict[str, Any]]:
+    meta: Dict[str, Dict[str, Any]] = {}
+
+    for agy_root in _discover_agy_dirs():
+        meta_cache = agy_root / "cache/conversation_metadata.json"
+        if meta_cache.exists():
+            try:
+                raw = json.loads(meta_cache.read_text(encoding="utf-8"))
+                for cid, entry in (raw.get("conversations") or {}).items():
+                    summary = entry.get("summary") or {}
+                    uris = summary.get("WorkspaceURIs") or []
+                    meta[cid] = {
+                        "id": cid,
+                        "title": summary.get("Title") or "",
+                        "preview": summary.get("Preview") or "",
+                        "workspace": shorten_workspace(uris),
+                        "workspace_uris": uris,
+                        "parent_id": "",
+                        "step_count": summary.get("NumSteps") or 0,
+                        "updated_at": summary.get("UpdatedAt") or entry.get("last_modified_time") or "",
+                    }
+            except Exception:
+                pass
+
+        summary_db = agy_root / "conversation_summaries.db"
+        if summary_db.exists():
+            try:
+                uri = f"{summary_db.resolve().as_uri()}?mode=ro"
+                conn = sqlite3.connect(uri, uri=True, timeout=1.5)
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    SELECT conversation_id, title, preview, step_count,
+                           last_modified_time, workspace_uris, parent_conversation_id, agent_name
+                    FROM conversation_summaries
+                    """
+                )
+                for row in cur.fetchall():
+                    cid, title, preview, step_count, lmt, uris_json, parent_id, agent_name = row
+                    try:
+                        uris = json.loads(uris_json) if uris_json else []
+                    except Exception:
+                        uris = []
+                    existing = meta.get(cid, {"id": cid})
+                    existing["title"] = title or existing.get("title") or ""
+                    existing["preview"] = preview or existing.get("preview") or ""
+                    existing["workspace"] = shorten_workspace(uris) if uris else existing.get("workspace", "(无工作区)")
+                    existing["workspace_uris"] = uris or existing.get("workspace_uris", [])
+                    existing["parent_id"] = parent_id or existing.get("parent_id", "")
+                    existing["agent_name"] = agent_name or ""
+                    existing["step_count"] = max(int(step_count or 0), int(existing.get("step_count") or 0))
+                    if lmt and not str(lmt).startswith("0001-01-01"):
+                        existing["updated_at"] = str(lmt)
+                    meta[cid] = existing
+                conn.close()
+            except Exception:
+                pass
+
+    return meta
+
+
+def load_agy_settings() -> Dict[str, Any]:
+    if not SETTINGS_FILE.exists():
+        return {}
+    try:
+        return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def load_transcript_events() -> List[Dict[str, Any]]:
+    events: List[Dict[str, Any]] = []
+    seen_convs = set()
+
+    for agy_root in _discover_agy_dirs():
+        brain_dir = agy_root / "brain"
+        if not brain_dir.exists():
+            continue
+        pattern = str(brain_dir / "*" / ".system_generated" / "logs" / "transcript.jsonl")
+        for path_str in glob.glob(pattern):
+            p = Path(path_str)
+            try:
+                cid = p.parts[p.parts.index("brain") + 1]
+            except Exception:
+                cid = "unknown"
+            if cid != "unknown" and cid in seen_convs:
+                continue
+            seen_convs.add(cid)
+            try:
+                with p.open("r", encoding="utf-8", errors="replace") as fh:
+                    for line in fh:
+                        if not line.strip():
+                            continue
+                        try:
+                            d = json.loads(line)
+                        except Exception:
+                            continue
+                        if "input_tokens" not in d and "output_tokens" not in d:
+                            continue
+                        dt = parse_iso_dt(d.get("created_at"))
+                        if dt is None:
+                            continue
+                        in_tok = int(d.get("input_tokens") or 0)
+                        cache_tok = int(d.get("cache_read_tokens") or 0)
+                        out_tok = int(d.get("output_tokens") or 0)
+                        model = d.get("model") or "unknown"
+                        tool_names = extract_tool_names(d.get("tool_calls"))
+                        events.append(
+                            {
+                                "conversation_id": cid,
+                                "step_index": int(d.get("step_index") or 0),
+                                "ts": dt,
+                                "ts_iso": dt.isoformat(),
+                                "model": model,
+                                "pool": classify_model_pool(model),
+                                "input_tokens": in_tok,
+                                "cache_read_tokens": cache_tok,
+                                "output_tokens": out_tok,
+                                "total_tokens": in_tok + cache_tok + out_tok,
+                                "billable_tokens": in_tok + out_tok,
+                                "context_size": in_tok + cache_tok,
+                                "est_cost_usd": estimate_cost_usd(model, in_tok, cache_tok, out_tok),
+                                "cache_saved_usd": estimate_cache_saved_usd(model, cache_tok),
+                                "tool_count": len(tool_names),
+                                "tool_names": tool_names,
+                                "has_thinking": bool(d.get("thinking")),
+                                "has_error": bool(d.get("error")),
+                            }
+                        )
+            except Exception:
+                continue
+
+    events.sort(key=lambda e: e["ts"])
+    return events
+
+
+def load_live_state() -> Optional[Dict[str, Any]]:
+    if not LIVE_STATE_FILE.exists():
+        return None
+    try:
+        return json.loads(LIVE_STATE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def load_quota_snapshots(max_age_days: int = 14) -> List[Dict[str, Any]]:
+    if not SNAPSHOTS_FILE.exists():
+        return []
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    snaps: List[Dict[str, Any]] = []
+    try:
+        with SNAPSHOTS_FILE.open("r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                try:
+                    d = json.loads(line)
+                except Exception:
+                    continue
+                dt = parse_iso_dt(d.get("captured_at"))
+                if dt is None or dt < cutoff:
+                    continue
+                d["_dt"] = dt
+                snaps.append(d)
+    except Exception:
+        return []
+    snaps.sort(key=lambda s: s["_dt"])
+    return snaps
+
+
+def infer_bucket_meta(bucket_id: str, reset_in_seconds: Optional[float]) -> Tuple[str, str, float, str, str]:
+    """Return (chinese_label, window_kind, cycle_hours, pool_key, pool_desc)."""
+    bid = bucket_id.lower()
+    is_weekly = (
+        "week" in bid
+        or "7d" in bid
+        or "seven" in bid
+        or (reset_in_seconds is not None and reset_in_seconds > 6 * 3600)
+    )
+    is_five_h = (
+        "5h" in bid
+        or "five" in bid
+        or "hour" in bid
+        or "short" in bid
+        or (not is_weekly and reset_in_seconds is not None and reset_in_seconds <= 6 * 3600)
+    )
+
+    if "3p" in bid or "claude" in bid or "anthropic" in bid or "gpt" in bid or "third" in bid:
+        group = "Claude / GPT"
+        pool_key = "claude_gpt"
+        pool_desc = "第三方池 · Claude Opus/Sonnet、GPT"
+    elif "flash" in bid:
+        group = "Gemini Flash"
+        pool_key = "gemini_flash"
+        pool_desc = "Gemini Flash 轻量系列"
+    elif "gemini" in bid or "pro" in bid:
+        group = "Gemini"
+        pool_key = "gemini_pro"
+        pool_desc = "Google 自家池 · Gemini 4 Neon/Flash"
+    else:
+        group = bucket_id
+        pool_key = "other"
+        pool_desc = bucket_id
+
+    if is_weekly:
+        return f"{group} · 每周限额", "weekly", 168.0, pool_key, pool_desc
+    if is_five_h:
+        return f"{group} · 当前用量 (5h)", "five_hour", 5.0, pool_key, pool_desc
+    return f"{group} · 用量限额", "other", 168.0, pool_key, pool_desc
+
+
+def extract_remaining_fraction(entry: Dict[str, Any]) -> Optional[float]:
+    if "remaining_fraction" in entry and entry["remaining_fraction"] is not None:
+        try:
+            v = float(entry["remaining_fraction"])
+            return max(0.0, min(1.0, v))
+        except Exception:
+            return None
+    if "remaining_percentage" in entry and entry["remaining_percentage"] is not None:
+        try:
+            v = float(entry["remaining_percentage"]) / 100.0
+            return max(0.0, min(1.0, v))
+        except Exception:
+            return None
+    return None
+
+
+def analyze_quota_buckets(
+    live_state: Optional[Dict[str, Any]],
+    snapshots: List[Dict[str, Any]],
+    events: List[Dict[str, Any]],
+    now: datetime,
+) -> Dict[str, Any]:
+    latest_quota: Dict[str, Any] = {}
+    captured_at: Optional[datetime] = None
+    source = "none"
+
+    if live_state and isinstance(live_state.get("quota"), dict) and live_state["quota"]:
+        latest_quota = live_state["quota"]
+        captured_at = parse_iso_dt(live_state.get("captured_at"))
+        source = live_state.get("source") or "statusline"
+    elif snapshots:
+        last = snapshots[-1]
+        if isinstance(last.get("quota"), dict):
+            latest_quota = last["quota"]
+            captured_at = last["_dt"]
+            source = last.get("source") or "snapshot"
+
+    stale_seconds = (now - captured_at).total_seconds() if captured_at else None
+
+    buckets: List[Dict[str, Any]] = []
+    for bid, raw in sorted(latest_quota.items()):
+        if not isinstance(raw, dict):
+            continue
+        rem_frac = extract_remaining_fraction(raw)
+        rem_amt = raw.get("remaining_amount")
+        reset_dt = parse_iso_dt(raw.get("reset_time"))
+        reset_in_sec = raw.get("reset_in_seconds")
+        if reset_dt is not None:
+            reset_in_sec = max(0.0, (reset_dt - now).total_seconds())
+        elif reset_in_sec is not None and captured_at is not None:
+            reset_in_sec = max(0.0, float(reset_in_sec) - (now - captured_at).total_seconds())
+            reset_dt = now + timedelta(seconds=reset_in_sec)
+
+        label, window_kind, cycle_hours, pool_key, pool_desc = infer_bucket_meta(bid, reset_in_sec)
+        rem_pct = round(rem_frac * 100.0, 2) if rem_frac is not None else None
+        used_pct = round((1.0 - rem_frac) * 100.0, 2) if rem_frac is not None else None
+        reset_passed = (reset_dt is not None and reset_dt <= now) or (reset_in_sec is not None and reset_in_sec <= 0)
+
+        time_elapsed_pct: Optional[float] = None
+        pacing_ratio: Optional[float] = None
+        cycle_start_dt: Optional[datetime] = None
+        daily_safe_budget_pct: Optional[float] = None
+        hourly_safe_budget_pct: Optional[float] = None
+
+        if reset_dt is not None and cycle_hours > 0:
+            cycle_start_dt = reset_dt - timedelta(hours=cycle_hours)
+            elapsed_h = max(0.0, (now - cycle_start_dt).total_seconds() / 3600.0)
+            time_elapsed_pct = round(min(100.0, (elapsed_h / cycle_hours) * 100.0), 2)
+            if used_pct is not None and time_elapsed_pct > 0.5:
+                pacing_ratio = round(used_pct / time_elapsed_pct, 2)
+            if rem_pct is not None and reset_in_sec is not None and reset_in_sec > 60:
+                rem_hours = reset_in_sec / 3600.0
+                hourly_safe_budget_pct = round(rem_pct / rem_hours, 2)
+                if window_kind == "weekly":
+                    rem_days = max(0.25, rem_hours / 24.0)
+                    daily_safe_budget_pct = round(min(rem_pct, rem_pct / rem_days), 1)
+
+        series: List[Dict[str, Any]] = []
+        for s in snapshots:
+            q = (s.get("quota") or {}).get(bid)
+            if not isinstance(q, dict):
+                continue
+            rf = extract_remaining_fraction(q)
+            if rf is None:
+                continue
+            if cycle_start_dt is not None and s["_dt"] < cycle_start_dt - timedelta(minutes=5):
+                continue
+            series.append(
+                {
+                    "ts": s["_dt"].isoformat(),
+                    "ts_cst": fmt_cst(s["_dt"], "%m-%d %H:%M"),
+                    "remaining_pct": round(rf * 100.0, 2),
+                    "used_pct": round((1.0 - rf) * 100.0, 2),
+                    "_dt": s["_dt"],
+                }
+            )
+
+        burn_pct_per_hour: Optional[float] = None
+        tokens_per_1pct: Optional[float] = None
+        projected_exhaust_hours: Optional[float] = None
+        projected_rem_at_reset: Optional[float] = None
+        burn_method = "none"
+
+        if len(series) >= 2:
+            lookback_h = 5.0 if window_kind == "five_hour" else 24.0
+            cutoff = now - timedelta(hours=lookback_h)
+            recent = [pt for pt in series if pt["_dt"] >= cutoff]
+            if len(recent) < 2:
+                recent = series
+            first, last_pt = recent[0], recent[-1]
+            dt_hours = (last_pt["_dt"] - first["_dt"]).total_seconds() / 3600.0
+            delta_used = last_pt["used_pct"] - first["used_pct"]
+            if dt_hours >= 0.05 and delta_used > 0.01:
+                burn_pct_per_hour = round(delta_used / dt_hours, 3)
+                burn_method = "observed"
+                win_tokens = sum(
+                    e["billable_tokens"]
+                    for e in events
+                    if first["_dt"] <= e["ts"] <= last_pt["_dt"]
+                )
+                if win_tokens > 0:
+                    tokens_per_1pct = round(win_tokens / delta_used, 0)
+
+        if burn_pct_per_hour is None and used_pct is not None and used_pct > 0.1 and cycle_start_dt is not None:
+            elapsed_h = (now - cycle_start_dt).total_seconds() / 3600.0
+            if elapsed_h >= 0.25:
+                burn_pct_per_hour = round(used_pct / elapsed_h, 3)
+                burn_method = "cycle_avg"
+
+        if burn_pct_per_hour is not None and burn_pct_per_hour > 0 and rem_pct is not None and not reset_passed:
+            projected_exhaust_hours = round(rem_pct / burn_pct_per_hour, 2)
+            if reset_in_sec is not None:
+                rem_hours = reset_in_sec / 3600.0
+                projected_rem_at_reset = round(max(0.0, rem_pct - burn_pct_per_hour * rem_hours), 2)
+
+        status = "ok"
+        if raw.get("disabled"):
+            status = "disabled"
+        elif reset_passed:
+            status = "reset_ready"
+        elif rem_pct is not None:
+            if rem_pct <= 10:
+                status = "critical"
+            elif rem_pct <= 25 or (pacing_ratio is not None and pacing_ratio >= 1.35):
+                status = "warning"
+
+        buckets.append(
+            {
+                "id": bid,
+                "label": label,
+                "pool_key": pool_key,
+                "pool_desc": pool_desc,
+                "window_kind": window_kind,
+                "cycle_hours": cycle_hours,
+                "remaining_pct": rem_pct,
+                "used_pct": used_pct,
+                "remaining_amount": rem_amt,
+                "disabled": bool(raw.get("disabled", False)),
+                "reset_passed": reset_passed,
+                "reset_time": reset_dt.isoformat() if reset_dt else None,
+                "reset_time_cst": fmt_cst(reset_dt, "%m-%d %H:%M") if reset_dt else "-",
+                "reset_in_seconds": int(reset_in_sec) if reset_in_sec is not None else None,
+                "reset_in_text": "已到期 · 下次调用刷新" if reset_passed else fmt_duration(reset_in_sec),
+                "time_elapsed_pct": time_elapsed_pct,
+                "pacing_ratio": pacing_ratio,
+                "daily_safe_budget_pct": daily_safe_budget_pct,
+                "hourly_safe_budget_pct": hourly_safe_budget_pct,
+                "burn_pct_per_hour": burn_pct_per_hour,
+                "burn_pct_per_day": round(burn_pct_per_hour * 24.0, 2) if burn_pct_per_hour is not None else None,
+                "burn_method": burn_method,
+                "projected_exhaust_hours": projected_exhaust_hours,
+                "projected_exhaust_text": fmt_duration(projected_exhaust_hours * 3600.0)
+                if projected_exhaust_hours is not None
+                else "-",
+                "projected_rem_at_reset": projected_rem_at_reset,
+                "tokens_per_1pct": tokens_per_1pct,
+                "status": status,
+                "history": [{k: v for k, v in pt.items() if k != "_dt"} for pt in series[-120:]],
+            }
+        )
+
+    # Group by pool first (Gemini first, then Claude/GPT), then 5h before weekly
+    pool_order = {"gemini_pro": 0, "gemini_flash": 1, "claude_gpt": 2, "other": 3}
+    win_order = {"five_hour": 0, "weekly": 1, "other": 2}
+    buckets.sort(key=lambda b: (pool_order.get(b["pool_key"], 9), win_order.get(b["window_kind"], 9), b["id"]))
+
+    return {
+        "has_live_quota": len(buckets) > 0,
+        "source": source,
+        "captured_at": captured_at.isoformat() if captured_at else None,
+        "captured_at_cst": fmt_cst(captured_at, "%m-%d %H:%M:%S") if captured_at else "-",
+        "stale_seconds": int(stale_seconds) if stale_seconds is not None else None,
+        "stale_text": fmt_duration(stale_seconds) if stale_seconds is not None else "未采集",
+        "snapshot_count": len(snapshots),
+        "buckets": buckets,
+    }
+
+
+def summarize_events(events: List[Dict[str, Any]]) -> Dict[str, Any]:
+    calls = len(events)
+    in_tok = sum(e["input_tokens"] for e in events)
+    cache_tok = sum(e["cache_read_tokens"] for e in events)
+    out_tok = sum(e["output_tokens"] for e in events)
+    total_prompt = in_tok + cache_tok
+    total_tok = total_prompt + out_tok
+    billable = in_tok + out_tok
+    cost = sum(e["est_cost_usd"] for e in events)
+    saved = sum(e["cache_saved_usd"] for e in events)
+    tools = sum(e["tool_count"] for e in events)
+    cache_hit_pct = round((cache_tok / total_prompt) * 100.0, 1) if total_prompt > 0 else 0.0
+    convs = len({e["conversation_id"] for e in events})
+    uncached_cost = cost + saved
+    saved_pct = round((saved / uncached_cost) * 100.0, 1) if uncached_cost > 0 else 0.0
+    return {
+        "calls": calls,
+        "conversations": convs,
+        "input_tokens": in_tok,
+        "cache_read_tokens": cache_tok,
+        "output_tokens": out_tok,
+        "total_tokens": total_tok,
+        "billable_tokens": billable,
+        "cache_hit_pct": cache_hit_pct,
+        "est_cost_usd": round(cost, 4),
+        "cache_saved_usd": round(saved, 4),
+        "cache_saved_pct": saved_pct,
+        "tool_calls": tools,
+    }
+
+
+def build_insights(
+    quota_info: Dict[str, Any],
+    windows_summary: Dict[str, Any],
+    by_pool: List[Dict[str, Any]],
+    burn_5h: Dict[str, Any],
+    selected_summary: Dict[str, Any],
+) -> List[Dict[str, str]]:
+    insights: List[Dict[str, str]] = []
+
+    # 1. Quota alerts
+    for b in quota_info.get("buckets") or []:
+        if b["status"] == "critical":
+            insights.append(
+                {
+                    "level": "crit",
+                    "title": f"{b['label']} 告急",
+                    "detail": f"仅剩 {b['remaining_pct']:.1f}%，距离重置还剩 {b['reset_in_text']}，建议切换轻量模型或暂缓重任务。",
+                }
+            )
+        elif b["status"] == "warning":
+            ratio_txt = f"（配速 {b['pacing_ratio']}x）" if b.get("pacing_ratio") else ""
+            insights.append(
+                {
+                    "level": "warn",
+                    "title": f"{b['label']} 消耗偏快{ratio_txt}",
+                    "detail": f"剩 {b['remaining_pct']:.1f}%，按当前速率重置前预计剩 {b.get('projected_rem_at_reset', 0):.1f}%。",
+                }
+            )
+
+    # 2. Cache savings highlight
+    if selected_summary["cache_read_tokens"] > 0:
+        hit = selected_summary["cache_hit_pct"]
+        lvl = "ok" if hit >= 85 else ("warn" if hit < 65 else "info")
+        insights.append(
+            {
+                "level": lvl,
+                "title": f"缓存命中率 {hit}% · 节省约 ${selected_summary['cache_saved_usd']:.2f}",
+                "detail": f"累计命中 {fmt_tokens(selected_summary['cache_read_tokens'])} tokens，降低了约 {selected_summary['cache_saved_pct']}% 的输入成本。",
+            }
+        )
+
+    # 3. Claude/GPT pool vs Gemini pool balance
+    claude_pool = next((p for p in by_pool if p["pool"] == "claude_gpt"), None)
+    if claude_pool and claude_pool["share_billable_pct"] >= 30:
+        insights.append(
+            {
+                "level": "info",
+                "title": f"Claude/GPT 池占有效用量 {claude_pool['share_billable_pct']}%",
+                "detail": f"共 {claude_pool['calls']} 次调用（估算 ${claude_pool['est_cost_usd']:.2f}），与 Gemini 限额池分离统计。",
+            }
+        )
+
+    # 4. 5h burst pace
+    if burn_5h["calls_per_hour"] >= 40:
+        insights.append(
+            {
+                "level": "info",
+                "title": f"近 5h 高频作业：{burn_5h['calls_per_hour']} 次/h",
+                "detail": f"有效消耗速率 {fmt_tokens(burn_5h['billable_tokens_per_hour'])}/h，建议关注 5h 滚动窗口。",
+            }
+        )
+
+    return insights[:4]
+
+
+def build_analytics(window: str = "7d") -> Dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    now_cst = now.astimezone(CST)
+
+    settings = load_agy_settings()
+    conv_meta = load_conversation_metadata()
+    events = load_transcript_events()
+    live_state = load_live_state()
+    snapshots = load_quota_snapshots()
+
+    start_5h = now - timedelta(hours=5)
+    start_24h = now - timedelta(hours=24)
+    start_today_cst = now_cst.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    monday_cst = (now_cst - timedelta(days=now_cst.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    ).astimezone(timezone.utc)
+    start_7d = now - timedelta(days=7)
+
+    win_map = {
+        "5h": start_5h,
+        "today": start_today_cst,
+        "24h": start_24h,
+        "week": monday_cst,
+        "7d": start_7d,
+        "all": datetime(1970, 1, 1, tzinfo=timezone.utc),
+    }
+    selected_start = win_map.get(window, start_7d)
+    selected_events = [e for e in events if e["ts"] >= selected_start]
+    selected_summary = summarize_events(selected_events)
+
+    windows_summary = {
+        "5h": summarize_events([e for e in events if e["ts"] >= start_5h]),
+        "today": summarize_events([e for e in events if e["ts"] >= start_today_cst]),
+        "24h": summarize_events([e for e in events if e["ts"] >= start_24h]),
+        "calendar_week": summarize_events([e for e in events if e["ts"] >= monday_cst]),
+        "7d": summarize_events([e for e in events if e["ts"] >= start_7d]),
+        "all": summarize_events(events),
+    }
+
+    # Burn rate from transcripts (last 5h)
+    ev_5h = [e for e in events if e["ts"] >= start_5h]
+    active_span_5h = 5.0
+    if len(ev_5h) >= 2:
+        span_h = (ev_5h[-1]["ts"] - ev_5h[0]["ts"]).total_seconds() / 3600.0
+        active_span_5h = max(0.25, min(5.0, span_h))
+    burn_5h = {
+        "calls_per_hour": round(len(ev_5h) / active_span_5h, 1) if ev_5h else 0.0,
+        "billable_tokens_per_hour": round(sum(e["billable_tokens"] for e in ev_5h) / active_span_5h, 0)
+        if ev_5h
+        else 0.0,
+        "total_tokens_per_hour": round(sum(e["total_tokens"] for e in ev_5h) / active_span_5h, 0)
+        if ev_5h
+        else 0.0,
+        "est_cost_per_hour": round(sum(e["est_cost_usd"] for e in ev_5h) / active_span_5h, 4)
+        if ev_5h
+        else 0.0,
+        "active_span_hours": round(active_span_5h, 2),
+    }
+
+    # 5-hour rolling window in 30 × 10-minute slots (CST)
+    slot_minute = (now_cst.minute // 10) * 10
+    end_slot_cst = now_cst.replace(minute=slot_minute, second=0, microsecond=0)
+    start_slot_cst = end_slot_cst - timedelta(minutes=290)
+    rolling_5h_map: Dict[str, Dict[str, Any]] = {}
+    rolling_5h_keys: List[str] = []
+    for i in range(30):
+        s_dt = start_slot_cst + timedelta(minutes=10 * i)
+        k = s_dt.strftime("%Y-%m-%d %H:%M")
+        rolling_5h_keys.append(k)
+        rolling_5h_map[k] = {
+            "slot": k,
+            "label": s_dt.strftime("%H:%M"),
+            "calls": 0,
+            "input_tokens": 0,
+            "cache_read_tokens": 0,
+            "output_tokens": 0,
+            "billable_tokens": 0,
+            "total_tokens": 0,
+            "est_cost_usd": 0.0,
+            "gemini_pro": 0,
+            "gemini_flash": 0,
+            "claude_gpt": 0,
+            "other": 0,
+        }
+    for e in ev_5h:
+        dt_c = e["ts"].astimezone(CST)
+        k = dt_c.replace(minute=(dt_c.minute // 10) * 10, second=0, microsecond=0).strftime("%Y-%m-%d %H:%M")
+        if k in rolling_5h_map:
+            b = rolling_5h_map[k]
+            b["calls"] += 1
+            b["input_tokens"] += e["input_tokens"]
+            b["cache_read_tokens"] += e["cache_read_tokens"]
+            b["output_tokens"] += e["output_tokens"]
+            b["billable_tokens"] += e["billable_tokens"]
+            b["total_tokens"] += e["total_tokens"]
+            b["est_cost_usd"] = round(b["est_cost_usd"] + e["est_cost_usd"], 4)
+            b[e["pool"]] += e["billable_tokens"]
+    rolling_5h_10m = [rolling_5h_map[k] for k in rolling_5h_keys]
+
+    # Model & Pool breakdown
+    by_model_raw: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    by_pool_raw: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    tool_counter: Counter = Counter()
+    for e in selected_events:
+        by_model_raw[e["model"]].append(e)
+        by_pool_raw[e["pool"]].append(e)
+        for tn in e["tool_names"]:
+            tool_counter[tn] += 1
+
+    total_sel_billable = max(1, sum(e["billable_tokens"] for e in selected_events))
+    total_sel_total = max(1, sum(e["total_tokens"] for e in selected_events))
+    total_sel_cost = max(0.0001, sum(e["est_cost_usd"] for e in selected_events))
+
+    by_model = []
+    for m, evs in by_model_raw.items():
+        s = summarize_events(evs)
+        s["model"] = m
+        s["pool"] = classify_model_pool(m)
+        s["pool_label"] = POOL_LABELS.get(s["pool"], s["pool"])
+        s["share_billable_pct"] = round((s["billable_tokens"] / total_sel_billable) * 100.0, 1)
+        s["share_total_pct"] = round((s["total_tokens"] / total_sel_total) * 100.0, 1)
+        s["share_cost_pct"] = round((s["est_cost_usd"] / total_sel_cost) * 100.0, 1)
+        by_model.append(s)
+    by_model.sort(key=lambda x: -x["billable_tokens"])
+
+    by_pool = []
+    for pool_key, evs in by_pool_raw.items():
+        s = summarize_events(evs)
+        s["pool"] = pool_key
+        s["label"] = POOL_LABELS.get(pool_key, pool_key)
+        s["share_billable_pct"] = round((s["billable_tokens"] / total_sel_billable) * 100.0, 1)
+        s["share_total_pct"] = round((s["total_tokens"] / total_sel_total) * 100.0, 1)
+        s["share_cost_pct"] = round((s["est_cost_usd"] / total_sel_cost) * 100.0, 1)
+        by_pool.append(s)
+    by_pool.sort(key=lambda x: -x["billable_tokens"])
+
+    total_tools = sum(tool_counter.values()) or 1
+    top_tools = [
+        {"name": name, "count": cnt, "share_pct": round((cnt / total_tools) * 100.0, 1)}
+        for name, cnt in tool_counter.most_common(10)
+    ]
+
+    # Hourly series (last 24 hours, CST)
+    hourly_buckets: Dict[str, Dict[str, Any]] = {}
+    base_hour_cst = now_cst.replace(minute=0, second=0, microsecond=0) - timedelta(hours=23)
+    hourly_keys: List[str] = []
+    for i in range(24):
+        h_dt = base_hour_cst + timedelta(hours=i)
+        k = h_dt.strftime("%Y-%m-%d %H:00")
+        hourly_keys.append(k)
+        hourly_buckets[k] = {
+            "hour": k,
+            "label": h_dt.strftime("%H:00"),
+            "calls": 0,
+            "input_tokens": 0,
+            "cache_read_tokens": 0,
+            "output_tokens": 0,
+            "billable_tokens": 0,
+            "total_tokens": 0,
+            "est_cost_usd": 0.0,
+            "gemini_pro": 0,
+            "gemini_flash": 0,
+            "claude_gpt": 0,
+            "other": 0,
+        }
+    for e in events:
+        if e["ts"] < start_24h - timedelta(hours=1):
+            continue
+        k = e["ts"].astimezone(CST).strftime("%Y-%m-%d %H:00")
+        if k in hourly_buckets:
+            b = hourly_buckets[k]
+            b["calls"] += 1
+            b["input_tokens"] += e["input_tokens"]
+            b["cache_read_tokens"] += e["cache_read_tokens"]
+            b["output_tokens"] += e["output_tokens"]
+            b["billable_tokens"] += e["billable_tokens"]
+            b["total_tokens"] += e["total_tokens"]
+            b["est_cost_usd"] = round(b["est_cost_usd"] + e["est_cost_usd"], 4)
+            b[e["pool"]] += e["billable_tokens"]
+    hourly_24h = [hourly_buckets[k] for k in hourly_keys]
+
+    # Daily series (last 7 days, CST) + 7x24 heatmap
+    daily_buckets: Dict[str, Dict[str, Any]] = {}
+    base_day_cst = now_cst.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=6)
+    daily_keys: List[str] = []
+    weekdays_zh = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+    heatmap_grid: Dict[str, List[Dict[str, Any]]] = {}
+
+    for i in range(7):
+        d_dt = base_day_cst + timedelta(days=i)
+        k = d_dt.strftime("%Y-%m-%d")
+        daily_keys.append(k)
+        daily_buckets[k] = {
+            "date": k,
+            "label": f"{d_dt.strftime('%m-%d')} {weekdays_zh[d_dt.weekday()]}",
+            "short_label": d_dt.strftime("%m-%d"),
+            "calls": 0,
+            "input_tokens": 0,
+            "cache_read_tokens": 0,
+            "output_tokens": 0,
+            "billable_tokens": 0,
+            "total_tokens": 0,
+            "est_cost_usd": 0.0,
+            "gemini_pro": 0,
+            "gemini_flash": 0,
+            "claude_gpt": 0,
+            "other": 0,
+        }
+        heatmap_grid[k] = [
+            {"hour": h, "calls": 0, "billable_tokens": 0, "est_cost_usd": 0.0}
+            for h in range(24)
+        ]
+
+    for e in events:
+        dt_c = e["ts"].astimezone(CST)
+        k = dt_c.strftime("%Y-%m-%d")
+        if k in daily_buckets:
+            b = daily_buckets[k]
+            b["calls"] += 1
+            b["input_tokens"] += e["input_tokens"]
+            b["cache_read_tokens"] += e["cache_read_tokens"]
+            b["output_tokens"] += e["output_tokens"]
+            b["billable_tokens"] += e["billable_tokens"]
+            b["total_tokens"] += e["total_tokens"]
+            b["est_cost_usd"] = round(b["est_cost_usd"] + e["est_cost_usd"], 4)
+            b[e["pool"]] += e["billable_tokens"]
+
+            cell = heatmap_grid[k][dt_c.hour]
+            cell["calls"] += 1
+            cell["billable_tokens"] += e["billable_tokens"]
+            cell["est_cost_usd"] = round(cell["est_cost_usd"] + e["est_cost_usd"], 4)
+
+    daily_7d = [daily_buckets[k] for k in daily_keys]
+    heatmap_7x24 = [
+        {"date": k, "label": daily_buckets[k]["label"], "hours": heatmap_grid[k]}
+        for k in daily_keys
+    ]
+
+    # Top conversations & projects
+    by_conv_raw: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    by_proj_raw: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for e in selected_events:
+        cid = e["conversation_id"]
+        by_conv_raw[cid].append(e)
+        ws = (conv_meta.get(cid) or {}).get("workspace") or "(无工作区)"
+        by_proj_raw[ws].append(e)
+
+    conversations = []
+    for cid, evs in by_conv_raw.items():
+        s = summarize_events(evs)
+        m = conv_meta.get(cid) or {}
+        models_used = sorted({e["model"] for e in evs if e["model"] != "unknown"})
+        s["id"] = cid
+        s["short_id"] = cid[:8]
+        s["title"] = m.get("title") or (m.get("preview", "")[:36] or "(未命名会话)")
+        s["workspace"] = m.get("workspace") or "(无工作区)"
+        s["is_subagent"] = bool(m.get("parent_id"))
+        s["parent_id"] = (m.get("parent_id") or "")[:8]
+        s["models"] = models_used
+        s["peak_context"] = max((e["context_size"] for e in evs), default=0)
+        s["last_ts"] = evs[-1]["ts"].isoformat()
+        s["last_ts_cst"] = fmt_cst(evs[-1]["ts"], "%m-%d %H:%M")
+        conversations.append(s)
+    conversations.sort(key=lambda x: -x["billable_tokens"])
+
+    projects = []
+    for ws, evs in by_proj_raw.items():
+        s = summarize_events(evs)
+        s["workspace"] = ws
+        s["share_billable_pct"] = round((s["billable_tokens"] / total_sel_billable) * 100.0, 1)
+        projects.append(s)
+    projects.sort(key=lambda x: -x["billable_tokens"])
+
+    # Recent calls feed
+    recent_calls = []
+    for e in events[-20:][::-1]:
+        m = conv_meta.get(e["conversation_id"]) or {}
+        recent_calls.append(
+            {
+                "ts_cst": fmt_cst(e["ts"], "%m-%d %H:%M:%S"),
+                "model": e["model"],
+                "pool": e["pool"],
+                "conversation_id": e["conversation_id"],
+                "short_id": e["conversation_id"][:8],
+                "title": (m.get("title") or "(未命名)")[:28],
+                "input_tokens": e["input_tokens"],
+                "cache_read_tokens": e["cache_read_tokens"],
+                "output_tokens": e["output_tokens"],
+                "tool_names": e["tool_names"][:3],
+                "tool_count": e["tool_count"],
+                "est_cost_usd": round(e["est_cost_usd"], 4),
+            }
+        )
+
+    quota_info = analyze_quota_buckets(live_state, snapshots, events, now)
+    insights = build_insights(quota_info, windows_summary, by_pool, burn_5h, selected_summary)
+
+    sl_cfg = settings.get("statusLine") if isinstance(settings.get("statusLine"), dict) else {}
+    sl_cmd = str(sl_cfg.get("command") or "")
+    sl_installed = ("statusline.py" in sl_cmd) and (sl_cfg.get("enabled", True) is not False)
+
+    live_session: Dict[str, Any] = {
+        "connected": live_state is not None,
+        "statusline_configured": sl_installed,
+        "statusline_path": str(APP_DIR / "statusline.py"),
+        "configured_model": settings.get("model") or "-",
+        "configured_planner": (settings.get("orchestrator") or {}).get("planner") or "-",
+        "agent_state": (live_state or {}).get("agent_state") or "-",
+        "plan_tier": (live_state or {}).get("plan_tier") or "-",
+        "email": (live_state or {}).get("email") or "-",
+        "version": (live_state or {}).get("version") or "-",
+        "active_model": ((live_state or {}).get("model") or {}).get("display_name")
+        or settings.get("model")
+        or "-",
+        "conversation_title": (live_state or {}).get("conversation_title") or "-",
+        "context_window": (live_state or {}).get("context_window") or None,
+        "cost": (live_state or {}).get("cost") or None,
+        "subagents": (live_state or {}).get("subagents") or [],
+        "captured_at_cst": fmt_cst(parse_iso_dt((live_state or {}).get("captured_at")), "%m-%d %H:%M:%S")
+        if live_state
+        else "-",
+    }
+
+    return {
+        "generated_at": now.isoformat(),
+        "generated_at_cst": fmt_cst(now, "%Y-%m-%d %H:%M:%S CST"),
+        "window": window,
+        "selected_summary": selected_summary,
+        "live_session": live_session,
+        "quota": quota_info,
+        "insights": insights,
+        "windows": windows_summary,
+        "burn_5h": burn_5h,
+        "rolling_5h_10m": rolling_5h_10m,
+        "by_pool": by_pool,
+        "by_model": by_model,
+        "top_tools": top_tools,
+        "hourly_24h": hourly_24h,
+        "daily_7d": daily_7d,
+        "heatmap_7x24": heatmap_7x24,
+        "conversations": conversations[:30],
+        "projects": projects[:15],
+        "recent_calls": recent_calls,
+    }
+
+
+def get_conversation_detail(conv_id: str) -> Optional[Dict[str, Any]]:
+    """Return turn-by-turn breakdown for a single conversation (supports full or 8-char prefix)."""
+    clean_id = re.sub(r"[^a-zA-Z0-9_-]", "", conv_id)
+    if not clean_id:
+        return None
+
+    target_file: Optional[Path] = None
+    matched_id = ""
+    for agy_root in _discover_agy_dirs():
+        brain_dir = agy_root / "brain"
+        if not brain_dir.exists():
+            continue
+        for d in brain_dir.iterdir():
+            if d.is_dir() and (d.name == clean_id or d.name.startswith(clean_id)):
+                cand = d / ".system_generated" / "logs" / "transcript.jsonl"
+                if cand.exists():
+                    target_file = cand
+                    matched_id = d.name
+                    break
+        if target_file is not None:
+            break
+    if target_file is None:
+        return None
+
+    meta = load_conversation_metadata().get(matched_id) or {}
+    turns: List[Dict[str, Any]] = []
+    tool_counter: Counter = Counter()
+    events: List[Dict[str, Any]] = []
+
+    with target_file.open("r", encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            if "input_tokens" not in d and "output_tokens" not in d:
+                continue
+            dt = parse_iso_dt(d.get("created_at"))
+            if dt is None:
+                continue
+            in_tok = int(d.get("input_tokens") or 0)
+            cache_tok = int(d.get("cache_read_tokens") or 0)
+            out_tok = int(d.get("output_tokens") or 0)
+            model = d.get("model") or "unknown"
+            tool_names = extract_tool_names(d.get("tool_calls"))
+            for tn in tool_names:
+                tool_counter[tn] += 1
+            ev = {
+                "conversation_id": matched_id,
+                "step_index": int(d.get("step_index") or 0),
+                "ts": dt,
+                "model": model,
+                "pool": classify_model_pool(model),
+                "input_tokens": in_tok,
+                "cache_read_tokens": cache_tok,
+                "output_tokens": out_tok,
+                "total_tokens": in_tok + cache_tok + out_tok,
+                "billable_tokens": in_tok + out_tok,
+                "context_size": in_tok + cache_tok,
+                "est_cost_usd": estimate_cost_usd(model, in_tok, cache_tok, out_tok),
+                "cache_saved_usd": estimate_cache_saved_usd(model, cache_tok),
+                "tool_count": len(tool_names),
+                "tool_names": tool_names,
+            }
+            events.append(ev)
+            turns.append(
+                {
+                    "turn": len(turns) + 1,
+                    "step_index": ev["step_index"],
+                    "ts_cst": fmt_cst(dt, "%m-%d %H:%M:%S"),
+                    "model": model,
+                    "pool": ev["pool"],
+                    "input_tokens": in_tok,
+                    "cache_read_tokens": cache_tok,
+                    "output_tokens": out_tok,
+                    "context_size": in_tok + cache_tok,
+                    "billable_tokens": in_tok + out_tok,
+                    "est_cost_usd": round(ev["est_cost_usd"], 4),
+                    "tool_names": tool_names,
+                }
+            )
+
+    summary = summarize_events(events)
+    return {
+        "id": matched_id,
+        "short_id": matched_id[:8],
+        "title": meta.get("title") or "(未命名会话)",
+        "workspace": meta.get("workspace") or "(无工作区)",
+        "is_subagent": bool(meta.get("parent_id")),
+        "summary": summary,
+        "peak_context": max((t["context_size"] for t in turns), default=0),
+        "tools": [{"name": k, "count": v} for k, v in tool_counter.most_common(12)],
+        "turns": turns,
+    }
+
+
+def export_sessions_csv(window: str = "7d") -> str:
+    data = build_analytics(window=window)
+    buf = io.StringIO()
+    buf.write("\ufeff")  # UTF-8 BOM for clean Excel opening on macOS
+    w = csv.writer(buf)
+    w.writerow(
+        [
+            "会话ID",
+            "标题",
+            "工作区",
+            "是否子代理",
+            "使用模型",
+            "调用次数",
+            "新增输入Tokens",
+            "缓存命中Tokens",
+            "输出Tokens",
+            "有效合计Tokens",
+            "峰值上下文",
+            "缓存命中率(%)",
+            "估算费用(USD)",
+            "缓存节省(USD)",
+            "最近活跃(CST)",
+        ]
+    )
+    for c in data["conversations"]:
+        w.writerow(
+            [
+                c["id"],
+                c["title"],
+                c["workspace"],
+                "是" if c["is_subagent"] else "否",
+                "; ".join(c["models"]),
+                c["calls"],
+                c["input_tokens"],
+                c["cache_read_tokens"],
+                c["output_tokens"],
+                c["billable_tokens"],
+                c["peak_context"],
+                c["cache_hit_pct"],
+                c["est_cost_usd"],
+                c["cache_saved_usd"],
+                c["last_ts_cst"],
+            ]
+        )
+    return buf.getvalue()
+
+
+def record_quota_snapshot(
+    quota_obj: Dict[str, Any],
+    source: str = "manual",
+    extra: Optional[Dict[str, Any]] = None,
+    force: bool = False,
+) -> bool:
+    ensure_data_dir()
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+
+    should_append = force
+    if not should_append:
+        last_snap = None
+        if SNAPSHOTS_FILE.exists():
+            try:
+                with SNAPSHOTS_FILE.open("rb") as fh:
+                    fh.seek(0, os.SEEK_END)
+                    size = fh.tell()
+                    fh.seek(max(0, size - 4096))
+                    lines = fh.read().decode("utf-8", errors="replace").splitlines()
+                    if lines:
+                        last_snap = json.loads(lines[-1])
+            except Exception:
+                last_snap = None
+        if last_snap is None:
+            should_append = True
+        else:
+            last_dt = parse_iso_dt(last_snap.get("captured_at"))
+            last_q = last_snap.get("quota") or {}
+            def _sig(q: Dict[str, Any]) -> Dict[str, Any]:
+                return {
+                    k: (v.get("remaining_fraction"), v.get("reset_time"))
+                    for k, v in q.items()
+                    if isinstance(v, dict)
+                }
+            if last_dt is None or (now - last_dt).total_seconds() >= 120:
+                should_append = True
+            elif _sig(last_q) != _sig(quota_obj):
+                should_append = True
+
+    if should_append and quota_obj:
+        rec: Dict[str, Any] = {
+            "captured_at": now_iso,
+            "source": source,
+            "quota": quota_obj,
+        }
+        if extra:
+            rec.update(extra)
+        with SNAPSHOTS_FILE.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    return should_append
+
+
+def save_manual_quota(bucket: str, remaining_pct: float, reset_str: Optional[str] = None) -> Dict[str, Any]:
+    """Shared helper for both CLI and Web UI manual quota recording."""
+    ensure_data_dir()
+    rem_pct = max(0.0, min(100.0, float(remaining_pct)))
+    reset_iso: Optional[str] = None
+    reset_in_sec: Optional[int] = None
+
+    if reset_str and reset_str.strip():
+        now_cst = datetime.now(CST)
+        raw = reset_str.strip()
+        dt_cst: Optional[datetime] = None
+        for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%m-%d %H:%M", "%Y-%m-%dT%H:%M"):
+            try:
+                parsed = datetime.strptime(raw, fmt)
+                if fmt == "%m-%d %H:%M":
+                    parsed = parsed.replace(year=now_cst.year)
+                dt_cst = parsed.replace(tzinfo=CST)
+                break
+            except ValueError:
+                continue
+        if dt_cst is None:
+            raise ValueError(f"无法解析重置时间: {raw}（格式如 2026-12-02 08:00 或 12-02 08:00）")
+        dt_utc = dt_cst.astimezone(timezone.utc)
+        reset_iso = dt_utc.isoformat()
+        reset_in_sec = max(0, int((dt_utc - datetime.now(timezone.utc)).total_seconds()))
+
+    existing_quota: Dict[str, Any] = {}
+    existing_state: Dict[str, Any] = {}
+    if LIVE_STATE_FILE.exists():
+        try:
+            old = json.loads(LIVE_STATE_FILE.read_text(encoding="utf-8"))
+            if isinstance(old, dict):
+                existing_state = old
+                if isinstance(old.get("quota"), dict):
+                    existing_quota = dict(old["quota"])
+        except Exception:
+            pass
+
+    entry: Dict[str, Any] = {"remaining_fraction": round(rem_pct / 100.0, 4)}
+    if reset_iso:
+        entry["reset_time"] = reset_iso
+    if reset_in_sec is not None:
+        entry["reset_in_seconds"] = reset_in_sec
+    existing_quota[bucket.strip()] = entry
+
+    record_quota_snapshot(existing_quota, source="manual", force=True)
+    state = dict(existing_state)
+    state["captured_at"] = datetime.now(timezone.utc).isoformat()
+    state["source"] = "manual"
+    state["quota"] = existing_quota
+    tmp = LIVE_STATE_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, LIVE_STATE_FILE)
+    return {"ok": True, "bucket": bucket.strip(), "remaining_pct": rem_pct, "reset_time": reset_iso}

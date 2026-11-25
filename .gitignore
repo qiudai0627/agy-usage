@@ -1,0 +1,10 @@
+# Runtime, build artifacts & local cache
+__pycache__/
+*.pyc
+.DS_Store
+data/
+dist/
+*.app/
+*.zip
+*.log
+*.pid

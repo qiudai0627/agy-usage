@@ -1,8 +1,10 @@
 import Cocoa
+import Darwin
 import Foundation
 
 // Native macOS Menu Bar + Notch-Proof Floating Glass Pill for Antigravity CLI (agy-usage).
-// Zero external dependencies; solves 14"/16" MacBook Pro camera-notch menu bar overflow.
+// Zero external dependencies; includes single-instance lock, multi-monitor hot-unplug clamping,
+// wake/offline auto-recovery, dynamic pill width, and Candidate A/B integration.
 
 struct QuotaBucket: Decodable {
     let id: String
@@ -34,10 +36,21 @@ struct LiveSession: Decodable {
     let active_model: String?
 }
 
+struct NotificationsInfo: Decodable {
+    let enabled: Bool?
+}
+
+struct WeekOverWeekInfo: Decodable {
+    let comparable: Bool?
+    let badge_text: String?
+}
+
 struct StatsResponse: Decodable {
     let generated_at_cst: String
     let live_session: LiveSession
     let quota: QuotaInfo
+    let notifications: NotificationsInfo?
+    let week_over_week: WeekOverWeekInfo?
     let windows: [String: WinSummary]
 }
 
@@ -86,12 +99,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pillLabel: NSTextField!
     private var sharedMenu: NSMenu = NSMenu()
     private var timer: Timer?
+    private var lockFD: Int32 = -1
+    private var offlineCount: Int = 0
+    private var lastAutoRecovery: Date = .distantPast
+
     private let port: Int = Int(ProcessInfo.processInfo.environment["AGY_USAGE_PORT"] ?? "18420") ?? 18420
     private var lastStats: StatsResponse?
 
+    private let activateNote = NSNotification.Name("local.agy.usage.menubar.activate")
     private let showPillKey = "AGYUsageShowFloatingPill"
     private let pillXKey = "AGYUsagePillOriginX"
     private let pillYKey = "AGYUsagePillOriginY"
+    private let pillHeight: CGFloat = 28
 
     private var showFloatingPill: Bool {
         get {
@@ -114,7 +133,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return "\(home)/.local/bin/agy-usage"
     }
 
+    private func acquireSingleInstanceLock() -> Bool {
+        let myPID = ProcessInfo.processInfo.processIdentifier
+        let bundleID = Bundle.main.bundleIdentifier ?? "local.agy.usage.menubar"
+        let peers = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+        if peers.contains(where: { $0.processIdentifier != myPID && !$0.isTerminated }) {
+            return false
+        }
+
+        let cacheDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".cache/agy-usage")
+        try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        let lockPath = cacheDir.appendingPathComponent(".menubar.lock").path
+        let fd = open(lockPath, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
+        if fd >= 0 {
+            if flock(fd, LOCK_EX | LOCK_NB) != 0 {
+                close(fd)
+                return false
+            }
+            lockFD = fd
+        }
+        return true
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if !acquireSingleInstanceLock() {
+            DistributedNotificationCenter.default().postNotificationName(
+                activateNote,
+                object: nil,
+                userInfo: nil,
+                deliverImmediately: true
+            )
+            NSApplication.shared.terminate(nil)
+            return
+        }
+
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         setupFloatingPill()
         updateIndicators(compactBar: "AGY", pillText: "AGY 连接中…", level: "ok")
@@ -122,28 +175,100 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updatePillVisibility()
         fetchStats(autoStartDaemon: true)
 
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleScreenChange),
+            name: NSApplication.didChangeScreenParametersNotification,
+            object: nil
+        )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(handleWake),
+            name: NSWorkspace.didWakeNotification,
+            object: nil
+        )
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(handleExternalActivate),
+            name: activateNote,
+            object: nil
+        )
+
         timer = Timer.scheduledTimer(withTimeInterval: 6.0, repeats: true) { [weak self] _ in
             self?.fetchStats(autoStartDaemon: false)
         }
     }
 
+    @objc private func handleScreenChange() {
+        ensurePillOnVisibleScreen(save: true)
+    }
+
+    @objc private func handleWake() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self = self else { return }
+            self.ensurePillOnVisibleScreen(save: false)
+            self.updatePillVisibility()
+            self.fetchStats(autoStartDaemon: true)
+        }
+    }
+
+    @objc private func handleExternalActivate() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.showFloatingPill = true
+            self.ensurePillOnVisibleScreen(save: true)
+            self.fetchStats(autoStartDaemon: true)
+        }
+    }
+
+    private func defaultTopRightOrigin(width: CGFloat) -> NSPoint {
+        let vf = NSScreen.main?.visibleFrame ?? NSScreen.screens.first?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        return NSPoint(x: vf.maxX - width - 14, y: vf.maxY - pillHeight - 8)
+    }
+
+    private func clampedOrigin(for candidate: NSRect) -> NSPoint {
+        let screens = NSScreen.screens
+        if !screens.isEmpty {
+            let center = NSPoint(x: candidate.midX, y: candidate.midY)
+            if let host = screens.first(where: { $0.visibleFrame.contains(center) }) ??
+                screens.first(where: {
+                    let inter = $0.visibleFrame.intersection(candidate)
+                    return !inter.isNull && inter.width >= candidate.width * 0.6 && inter.height >= candidate.height * 0.8
+                }) {
+                let vf = host.visibleFrame
+                let cx = min(max(candidate.origin.x, vf.minX + 6), vf.maxX - candidate.width - 6)
+                let cy = min(max(candidate.origin.y, vf.minY + 6), vf.maxY - candidate.height - 6)
+                return NSPoint(x: cx, y: cy)
+            }
+        }
+        return defaultTopRightOrigin(width: candidate.width)
+    }
+
+    private func ensurePillOnVisibleScreen(save: Bool) {
+        guard pillPanel != nil else { return }
+        let cur = pillPanel.frame
+        let safeOrigin = clampedOrigin(for: cur)
+        if abs(safeOrigin.x - cur.origin.x) > 0.5 || abs(safeOrigin.y - cur.origin.y) > 0.5 {
+            pillPanel.setFrameOrigin(safeOrigin)
+        }
+        if save {
+            UserDefaults.standard.set(Double(safeOrigin.x), forKey: pillXKey)
+            UserDefaults.standard.set(Double(safeOrigin.y), forKey: pillYKey)
+        }
+    }
+
     private func setupFloatingPill() {
         let w: CGFloat = 168
-        let h: CGFloat = 28
-        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        var x = screen.maxX - w - 14
-        var y = screen.maxY - h - 8
+        let h: CGFloat = pillHeight
+        var origin = defaultTopRightOrigin(width: w)
         if UserDefaults.standard.object(forKey: pillXKey) != nil {
             let savedX = CGFloat(UserDefaults.standard.double(forKey: pillXKey))
             let savedY = CGFloat(UserDefaults.standard.double(forKey: pillYKey))
-            if screen.insetBy(dx: -40, dy: -40).contains(NSPoint(x: savedX, y: savedY)) {
-                x = savedX
-                y = savedY
-            }
+            origin = clampedOrigin(for: NSRect(x: savedX, y: savedY, width: w, height: h))
         }
 
         pillPanel = NSPanel(
-            contentRect: NSRect(x: x, y: y, width: w, height: h),
+            contentRect: NSRect(x: origin.x, y: origin.y, width: w, height: h),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -168,25 +293,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         pillLabel = NSTextField(labelWithString: "● AGY")
         pillLabel.alignment = .center
-        pillLabel.frame = NSRect(x: 8, y: 5, width: w - 16, height: 18)
+        pillLabel.frame = NSRect(x: 10, y: 5, width: w - 20, height: 18)
         pillLabel.textColor = .white
         pillView.addSubview(pillLabel)
 
         pillView.onClick = { [weak self] in
             guard let self = self else { return }
+            if self.lastStats == nil {
+                self.fetchStats(autoStartDaemon: true)
+            }
             self.sharedMenu.popUp(positioning: nil, at: NSPoint(x: 0, y: -4), in: self.pillView)
         }
-        pillView.onPositionChanged = { [weak self] pt in
-            guard let self = self else { return }
-            UserDefaults.standard.set(Double(pt.x), forKey: self.pillXKey)
-            UserDefaults.standard.set(Double(pt.y), forKey: self.pillYKey)
+        pillView.onPositionChanged = { [weak self] _ in
+            self?.ensurePillOnVisibleScreen(save: true)
         }
 
         pillPanel.contentView = pillView
     }
 
+    private func resizePill(toFit attrText: NSAttributedString) {
+        guard pillPanel != nil else { return }
+        let idealW = min(268, max(136, ceil(attrText.size().width) + 26))
+        let oldFrame = pillPanel.frame
+        if abs(idealW - oldFrame.width) >= 2 {
+            // Keep right edge anchored so expanding text doesn't drift off-screen
+            let anchoredX = oldFrame.maxX - idealW
+            let cand = NSRect(x: anchoredX, y: oldFrame.origin.y, width: idealW, height: pillHeight)
+            let safePt = clampedOrigin(for: cand)
+            pillPanel.setFrame(NSRect(x: safePt.x, y: safePt.y, width: idealW, height: pillHeight), display: true)
+            pillView.frame = NSRect(x: 0, y: 0, width: idealW, height: pillHeight)
+            pillLabel.frame = NSRect(x: 10, y: 5, width: idealW - 20, height: 18)
+        }
+    }
+
     private func updatePillVisibility() {
         if showFloatingPill {
+            ensurePillOnVisibleScreen(save: false)
             pillPanel.orderFrontRegardless()
         } else {
             pillPanel.orderOut(nil)
@@ -237,12 +379,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .font: NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .semibold)
         ]))
         pillLabel.attributedStringValue = pillAttr
+        resizePill(toFit: pillAttr)
     }
 
     private func fetchStats(autoStartDaemon: Bool) {
         guard let url = URL(string: "http://127.0.0.1:\(port)/api/stats?window=7d") else { return }
         var req = URLRequest(url: url)
-        req.timeoutInterval = 2.0
+        req.timeoutInterval = 2.5
 
         URLSession.shared.dataTask(with: req) { [weak self] data, resp, _ in
             guard let self = self else { return }
@@ -250,18 +393,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                let http = resp as? HTTPURLResponse, http.statusCode == 200,
                let decoded = try? JSONDecoder().decode(StatsResponse.self, from: data) {
                 DispatchQueue.main.async {
+                    self.offlineCount = 0
                     self.lastStats = decoded
                     self.applyStats(decoded)
                     self.rebuildMenu()
                 }
             } else if autoStartDaemon {
+                self.lastAutoRecovery = Date()
                 self.startDaemonSilently()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
                     self.fetchStats(autoStartDaemon: false)
                 }
             } else {
                 DispatchQueue.main.async {
-                    self.updateIndicators(compactBar: "AGY", pillText: "AGY 离线 (点此启动)", level: "warning")
+                    self.offlineCount += 1
+                    if self.offlineCount >= 3 && Date().timeIntervalSince(self.lastAutoRecovery) >= 60.0 {
+                        self.lastAutoRecovery = Date()
+                        self.startDaemonSilently()
+                    }
+                    self.updateIndicators(compactBar: "AGY", pillText: "AGY 离线 (点此恢复)", level: "warning")
                     self.rebuildMenu()
                 }
             }
@@ -277,7 +427,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             var barParts: [String] = []
             if let g = gemW, let u = g.used_pct {
                 pillParts.append(String(format: "G %.0f%%", u))
-                barParts.append(String(format: "%.0f", u))
+                barParts.append(String(format: "%.0f%%", u))
             }
             if let c = cldW, let u = c.used_pct {
                 pillParts.append(String(format: "C %.0f%%", u))
@@ -349,7 +499,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
                 if !cldBuckets.isEmpty {
                     if !gemBuckets.isEmpty { menu.addItem(NSMenuItem.separator()) }
-                    menu.addItem(makeDisabledItem("▸ Claude / GPT 第三方池 (3P)"))
+                    menu.addItem(makeDisabledItem("▸ Claude / GPT 第三方池"))
                     for b in cldBuckets {
                         let used = b.used_pct ?? 0.0
                         let tag = b.window_kind == "five_hour" ? "当前5h" : "每周7d"
@@ -359,18 +509,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }
             } else {
-                menu.addItem(makeDisabledItem("等待 agy 推送实时周限额 (/statusline)"))
+                menu.addItem(makeDisabledItem("等待新开的 Antigravity 会话推送实时额度"))
             }
 
             menu.addItem(NSMenuItem.separator())
             if let wt = st.windows["today"], let w7 = st.windows["7d"] {
                 menu.addItem(makeDisabledItem("今日有效: \(fmtTokens(wt.billable_tokens)) (\(wt.calls)次)"))
-                menu.addItem(makeDisabledItem(String(format: "近7日有效: %@ · 缓存省 $%.0f (%.1f%%)",
-                                                     fmtTokens(w7.billable_tokens), w7.cache_saved_usd, w7.cache_hit_pct)))
+                let wowTxt = st.week_over_week?.badge_text ?? ""
+                let wowBit = wowTxt.isEmpty ? "" : " · \(wowTxt)"
+                menu.addItem(makeDisabledItem(String(format: "近7日有效: %@%@ · 省 $%.0f",
+                                                     fmtTokens(w7.billable_tokens), wowBit, w7.cache_saved_usd)))
             }
             menu.addItem(makeDisabledItem("同步于 \(st.generated_at_cst)"))
         } else {
-            menu.addItem(makeDisabledItem("正在连接本地监控服务 (127.0.0.1:\(port))..."))
+            menu.addItem(makeDisabledItem("本地监控服务离线 (127.0.0.1:\(port))"))
+            let startItem = NSMenuItem(title: "立即启动本地监控服务", action: #selector(manualRefresh), keyEquivalent: "s")
+            startItem.target = self
+            menu.addItem(startItem)
         }
 
         menu.addItem(NSMenuItem.separator())
@@ -387,6 +542,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pillToggle.target = self
         pillToggle.state = showFloatingPill ? .on : .off
         menu.addItem(pillToggle)
+
+        let resetPosItem = NSMenuItem(title: "重置悬浮胶囊位置", action: #selector(resetPillPosition), keyEquivalent: "")
+        resetPosItem.target = self
+        menu.addItem(resetPosItem)
+
+        let notifyOn = lastStats?.notifications?.enabled ?? false
+        let notifyItem = NSMenuItem(title: "额度告警与回血通知 (80%/95%)", action: #selector(toggleNotifications), keyEquivalent: "")
+        notifyItem.target = self
+        notifyItem.state = notifyOn ? .on : .off
+        menu.addItem(notifyItem)
 
         let autoItem = NSMenuItem(title: "登录时自动启动", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         autoItem.target = self
@@ -427,6 +592,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildMenu()
     }
 
+    @objc private func resetPillPosition() {
+        UserDefaults.standard.removeObject(forKey: pillXKey)
+        UserDefaults.standard.removeObject(forKey: pillYKey)
+        showFloatingPill = true
+        let pt = defaultTopRightOrigin(width: pillPanel.frame.width)
+        pillPanel.setFrameOrigin(pt)
+        pillPanel.orderFrontRegardless()
+        rebuildMenu()
+    }
+
+    @objc private func toggleNotifications() {
+        guard let url = URL(string: "http://127.0.0.1:\(port)/api/preferences") else { return }
+        let cur = lastStats?.notifications?.enabled ?? false
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["notifications_enabled": !cur])
+        URLSession.shared.dataTask(with: req) { [weak self] _, _, _ in
+            DispatchQueue.main.async {
+                self?.fetchStats(autoStartDaemon: false)
+            }
+        }.resume()
+    }
+
     @objc private func toggleLaunchAtLogin() {
         let fm = FileManager.default
         if fm.fileExists(atPath: launchAgentURL.path) {
@@ -448,6 +637,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func quitApp() {
+        if lockFD >= 0 {
+            flock(lockFD, LOCK_UN)
+            close(lockFD)
+            lockFD = -1
+        }
         NSApplication.shared.terminate(nil)
     }
 }

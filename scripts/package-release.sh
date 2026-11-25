@@ -56,7 +56,7 @@ chmod 755 "$PKG_DIR/install.sh" "$PKG_DIR/uninstall.sh" "$PKG_DIR/verify.sh" \
 
 echo "==> 执行隐私、个人路径与凭证零泄露门禁扫描..."
 PKG_DIR="$PKG_DIR" CURRENT_USER="$(id -un)" python3 - <<'PY'
-import os, re, sys
+import os, re, struct, sys
 from pathlib import Path
 
 pkg = Path(os.environ["PKG_DIR"])
@@ -72,6 +72,22 @@ patterns = [
 if cur_user and cur_user.lower() not in ("runner", "root", "ubuntu", "admin", "user"):
     patterns.append(("本机用户名", re.compile(rf"\b{re.escape(cur_user)}\b", re.IGNORECASE)))
 
+
+def check_png_chunks(path: Path):
+    data = path.read_bytes()
+    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return [("PNG 文件头损坏", "invalid signature")]
+    pos = 8
+    issues = []
+    while pos + 8 <= len(data):
+        length = struct.unpack(">I", data[pos : pos + 4])[0]
+        ctype = data[pos + 4 : pos + 8].decode("latin1", errors="replace")
+        if ctype in ("tEXt", "iTXt", "zTXt", "eXIf"):
+            issues.append(("PNG 隐私元数据块", ctype))
+        pos += 12 + length
+    return issues
+
+
 hits = []
 for p in sorted(pkg.rglob("*")):
     if p.is_symlink():
@@ -79,17 +95,22 @@ for p in sorted(pkg.rglob("*")):
         continue
     if not p.is_file():
         continue
+    rel = str(p.relative_to(pkg))
+    if p.suffix.lower() == ".png":
+        for label, detail in check_png_chunks(p):
+            hits.append((rel, f"{label}: {detail}"))
+        continue
     text = p.read_text(encoding="utf-8", errors="strict")
     for label, rx in patterns:
         m = rx.search(text)
         if m:
-            hits.append((str(p.relative_to(pkg)), f"{label}: {m.group(0)}"))
+            hits.append((rel, f"{label}: {m.group(0)}"))
 
 if hits:
     for rel, detail in hits:
         sys.stderr.write(f"✖ 门禁阻断 [{rel}] -> {detail}\n")
     sys.exit(1)
-print("✓ 隐私与凭证门禁通过（0 个人路径 / 0 用户名 / 0 私人邮箱 / 0 密钥）")
+print("✓ 隐私与凭证门禁通过（0 个人路径 / 0 用户名 / 0 私人邮箱 / 0 密钥 / 0 图片元数据）")
 PY
 
 mkdir -p "$(dirname "$OUT_ZIP")"

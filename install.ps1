@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = "Stop"
+﻿﻿$ErrorActionPreference = "Stop"
 
 # 支持两种模式：
 # 1. 本地目录执行：.\install.ps1 或双击 Start-Windows.bat
@@ -11,6 +11,7 @@ $ScriptParent = if ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvoca
 if ($ScriptParent -and (Test-Path (Join-Path $ScriptParent "src\cli.py"))) {
     $RootDir = $ScriptParent
 } else {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072
     $RepoSlug = if ($env:AGY_USAGE_REPO) { $env:AGY_USAGE_REPO } else { "qiudai0627/agy-usage" }
     $RootDir = Join-Path $env:LOCALAPPDATA "agy-usage\app"
     $ZipUrl = "https://github.com/$RepoSlug/archive/refs/heads/main.zip"
@@ -42,21 +43,28 @@ $PywExe = if (Test-Path $PywCandidate) { $PywCandidate } else { $PyExe }
 
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 $WrapperPath = Join-Path $BinDir "agy-usage.cmd"
-@"
-@echo off
-"$PyExe" "$SrcDir\cli.py" %*
-"@ | Set-Content -Path $WrapperPath -Encoding UTF8
-Write-Host "✓ 已创建命令: $WrapperPath" -ForegroundColor Green
+$CmdBody = "@echo off`r`n@chcp 65001 >nul`r`n`"$PyExe`" `"$SrcDir\cli.py`" %*`r`n"
+[System.IO.File]::WriteAllText($WrapperPath, $CmdBody, (New-Object System.Text.UTF8Encoding($false)))
+Write-Host "OK: 已创建命令脚本 $WrapperPath" -ForegroundColor Green
+
+$UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+$PathEntries = if ($UserPath) { $UserPath -split ";" } else { @() }
+if (-not ($PathEntries | Where-Object { $_.TrimEnd("\") -ieq $BinDir.TrimEnd("\") })) {
+    $NewUserPath = if ($UserPath) { "$UserPath;$BinDir" } else { $BinDir }
+    [Environment]::SetEnvironmentVariable("Path", $NewUserPath, "User")
+    $env:Path = "$env:Path;$BinDir"
+    Write-Host "OK: 已将 $BinDir 加入当前用户 PATH" -ForegroundColor Green
+}
 
 & $PyExe "$SrcDir\cli.py" install-statusline --stack
 & $PyExe "$SrcDir\cli.py" daemon restart --port $Port
 
 if (Test-Path $WinWidget) {
-    Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" -ErrorAction SilentlyContinue |
+    Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -like "*tray_widget.pyw*" } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     Start-Process -FilePath $PywExe -ArgumentList "`"$WinWidget`""
-    Write-Host "✓ 已启动右下角桌面迷你悬浮胶囊 (双击展开详情 / 右键菜单)" -ForegroundColor Green
+    Write-Host "OK: 已启动右下角桌面迷你悬浮胶囊 (双击展开详情 / 右键菜单)" -ForegroundColor Green
 }
 
 Write-Host ""

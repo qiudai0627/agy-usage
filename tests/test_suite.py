@@ -68,13 +68,15 @@ for w in (80, 105, 120, 160):
     has_full = all(t in clean for t in ("Gemini5h", "Gemini周", "Claude5h", "Claude周"))
     has_short = all(t in clean for t in ("G5h", "G周", "C5h", "C周"))
     assert has_full or has_short, f"Missing bucket at width {w}: {clean!r}"
-    # Must explicitly include '已用' (never bare percentage)
+    # Must explicitly include '已用' (never bare percentage) and pool identity colors (CYAN / MAGENTA)
     assert clean.count("已用") == 4, f"Expected 4 '已用' markers at width {w}: {clean!r}"
+    assert "\x1b[36mGemini5h\x1b[0m" in out or "\x1b[36mG5h\x1b[0m" in out, f"Missing CYAN Gemini label at w={w}: {out!r}"
+    assert "\x1b[35mClaude周\x1b[0m" in out or "\x1b[35mC周\x1b[0m" in out, f"Missing MAGENTA Claude label at w={w}: {out!r}"
     # Respect right margin (>= 16 cols)
     vis_w = statusline.display_width(out)
     assert vis_w <= w - 16, f"Width {vis_w} exceeded budget for w={w}: {clean!r}"
 
-# Ultra-narrow widths (40, 52, 60) must ALWAYS obey >=16 right margin and show web prompt
+# Ultra-narrow widths (40, 52, 60) must ALWAYS obey >=16 right margin and show clear CYAN web prompt (no DIM)
 heavy = dict(
     payload,
     quota={
@@ -90,11 +92,13 @@ for w in (40, 52, 60):
     vis_u = statusline.display_width(out_u)
     assert vis_u <= w - 16, f"R2 margin violated at w={w}: vis={vis_u} > {w - 16} ({clean_u!r})"
     assert "网页" in clean_u and "agy-usage" in clean_u, f"Missing web hint at w={w}: {clean_u!r}"
+    assert "\x1b[36m" in out_u and "\x1b[2m" not in out_u, f"Ultra-narrow hint must use CYAN without DIM at w={w}: {out_u!r}"
 
-# Extremely narrow (30 cols) still obeys >=16 right margin with short hint
+# Extremely narrow (30 cols) still obeys >=16 right margin with clear CYAN short hint
 out_30 = statusline.render(dict(heavy, terminal_width=30))
 assert statusline.display_width(out_30) <= 30 - 16, out_30
 assert "网页" in re.sub(r"\x1b\[[0-9;]*m", "", out_30), out_30
+assert "\x1b[36m" in out_30 and "\x1b[2m" not in out_30, out_30
 
 # Missing bucket must show placeholder, never fake 0%
 partial = dict(payload, terminal_width=120, quota={"gemini-weekly": {"remaining_fraction": 0.85, "reset_time": fut_w}})
@@ -770,7 +774,7 @@ print("CANDIDATE_B_TZ_OK")
         row1_model_count = 0
         row2_model_count = 0
         for txt in root.findall("s:text", ns):
-            content = (txt.text or "").strip()
+            content = "".join(txt.itertext()).strip()
             y = float(txt.attrib.get("y", "0"))
             x = float(txt.attrib.get("x", "0"))
             fs = float(txt.attrib.get("font-size", "11"))
@@ -798,6 +802,40 @@ print("CANDIDATE_B_TZ_OK")
                 reserved_x - 16.0,
                 f"Bucket {content!r} (x={x}, est_right={right_edge:.1f}) encroaches reserved zone x={reserved_x}",
             )
+
+    def test_ui_color_themes_semantics(self) -> None:
+        import importlib.machinery
+        import importlib.util
+
+        # Verify Windows tray widget theme palette & system mapping without opening GUI
+        win_path = ROOT_DIR / "windows" / "tray_widget.pyw"
+        loader = importlib.machinery.SourceFileLoader("tray_widget_mod", str(win_path))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        assert spec is not None
+        tw = importlib.util.module_from_spec(spec)
+        loader.exec_module(tw)
+
+        self.assertIn("tongtou", tw.THEMES)
+        self.assertEqual(tw.THEMES["dark"]["gem"].lower(), "#38bdf8")
+        self.assertEqual(tw.THEMES["dark"]["cld"].lower(), "#a78bfa")
+        self.assertEqual(tw.THEMES["light"]["gem"].lower(), "#0e7490")
+        self.assertEqual(tw.THEMES["light"]["cld"].lower(), "#6d28d9")
+        self.assertNotEqual(tw.THEMES["light"]["gem"].lower(), "#db2777")
+        self.assertEqual(tw.THEMES["tongtou"]["bg"].upper(), "#F5F0EB")
+        self.assertEqual(tw.THEMES["tongtou"]["fg"].upper(), "#2C3E50")
+        self.assertEqual(tw.THEMES["tongtou"]["border"].upper(), "#7BA7A7")
+        self.assertEqual(tw.THEMES["tongtou"]["gem"].upper(), "#4D7C7C")
+        self.assertEqual(tw.THEMES["tongtou"]["cld"].upper(), "#9A7B4F")
+        # System preference must ONLY resolve to light or dark, never tongtou
+        self.assertIn(tw._resolved_theme("system"), ("light", "dark"))
+        self.assertEqual(tw._resolved_theme("tongtou"), "tongtou")
+        # Numeric thresholds: <55 ok, >=55 warn, >=80 crit, expired gray (never sand-gold)
+        tt = tw.THEMES["tongtou"]
+        self.assertEqual(tw._val_color(20.0, False, tt), tt["ok"])
+        self.assertEqual(tw._val_color(55.0, False, tt), tt["warn"])
+        self.assertEqual(tw._val_color(80.0, False, tt), tt["crit"])
+        self.assertEqual(tw._val_color(10.0, True, tt), tt["expired"])
+        self.assertNotEqual(tw._val_color(55.0, False, tt).upper(), "#9A7B4F")
 
 
 if __name__ == "__main__":

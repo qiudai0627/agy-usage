@@ -23,6 +23,104 @@ API_URL = f"http://127.0.0.1:{PORT}/api/stats?window=7d"
 PREF_URL = f"http://127.0.0.1:{PORT}/api/preferences"
 WEB_URL = f"http://127.0.0.1:{PORT}"
 CLI_PATH = Path(__file__).resolve().parent.parent / "src" / "cli.py"
+THEME_FILE = Path.home() / ".cache" / "agy-usage" / "ui-theme"
+THEMES = {
+    "dark": {
+        "bg": "#1e293b",
+        "fg": "#e2e8f0",
+        "muted": "#94a3b8",
+        "border": "#38bdf8",
+        "btn": "#334155",
+        "btn_fg": "#e2e8f0",
+        "gem": "#38bdf8",
+        "cld": "#a78bfa",
+        "sep": "#64748b",
+        "ok": "#34d399",
+        "warn": "#fbbf24",
+        "crit": "#f87171",
+        "expired": "#94a3b8",
+    },
+    "light": {
+        "bg": "#fff5f8",
+        "fg": "#4a3540",
+        "muted": "#745664",
+        "border": "#f9a8d4",
+        "btn": "#fce7f3",
+        "btn_fg": "#9d174d",
+        "gem": "#0e7490",
+        "cld": "#6d28d9",
+        "sep": "#b895a5",
+        "ok": "#059669",
+        "warn": "#d97706",
+        "crit": "#dc2626",
+        "expired": "#6b7280",
+    },
+    "tongtou": {
+        "bg": "#F5F0EB",
+        "fg": "#2C3E50",
+        "muted": "#6B7280",
+        "border": "#7BA7A7",
+        "btn": "#E8E2DB",
+        "btn_fg": "#2C3E50",
+        "gem": "#4D7C7C",
+        "cld": "#9A7B4F",
+        "sep": "#A8A29E",
+        "ok": "#059669",
+        "warn": "#d97706",
+        "crit": "#dc2626",
+        "expired": "#78716c",
+    },
+}
+
+
+def _windows_system_is_light() -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        import winreg  # type: ignore
+
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+        ) as key:
+            value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+            return int(value) == 1
+    except Exception:
+        return False
+
+
+def _read_theme_pref() -> str:
+    try:
+        value = THEME_FILE.read_text(encoding="utf-8").strip()
+        if value in ("light", "tongtou", "dark", "system"):
+            return value
+    except Exception:
+        pass
+    return "system"
+
+
+def _write_theme_pref(value: str) -> None:
+    try:
+        THEME_FILE.parent.mkdir(parents=True, exist_ok=True)
+        THEME_FILE.write_text(value, encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _resolved_theme(pref: str) -> str:
+    if pref in ("light", "tongtou", "dark"):
+        return pref
+    return "light" if _windows_system_is_light() else "dark"
+
+
+def _val_color(used_pct: float, expired: bool, pal: Dict[str, str]) -> str:
+    if expired:
+        return pal["expired"]
+    if used_pct >= 80.0:
+        return pal["crit"]
+    if used_pct >= 55.0:
+        return pal["warn"]
+    return pal["ok"]
 
 _MUTEX_HANDLE: Any = None
 _LOCK_FH: Any = None
@@ -135,7 +233,6 @@ def main() -> int:
     root.title("AGY Usage")
     root.overrideredirect(True)
     root.attributes("-topmost", True)
-    root.configure(bg="#0f1728", highlightthickness=1, highlightbackground="#263552")
 
     state: Dict[str, Any] = {
         "expanded": False,
@@ -143,39 +240,46 @@ def main() -> int:
         "notify_on": False,
         "drag_x": 0,
         "drag_y": 0,
+        "theme_pref": _read_theme_pref(),
+        "last_data": None,
     }
 
-    bar_frame = tk.Frame(root, bg="#0f1728", cursor="hand2")
+    bar_frame = tk.Frame(root, cursor="hand2")
     bar_frame.pack(fill="x", padx=9, pady=5)
 
-    dot_lbl = tk.Label(bar_frame, text="●", fg="#10b981", bg="#0f1728", font=("Segoe UI", 10, "bold"))
+    dot_lbl = tk.Label(bar_frame, text="●", fg="#34d399", font=("Segoe UI", 10, "bold"))
     dot_lbl.pack(side="left")
 
-    summary_lbl = tk.Label(
-        bar_frame,
-        text="AGY 连接中...",
-        fg="#edf2fb",
-        bg="#0f1728",
-        font=("Consolas", 9, "bold"),
-    )
-    summary_lbl.pack(side="left", padx=6)
+    summary_frame = tk.Frame(bar_frame, cursor="hand2")
+    summary_frame.pack(side="left", padx=6)
 
-    open_btn = tk.Label(bar_frame, text="↗", fg="#38bdf8", bg="#0f1728", font=("Segoe UI", 10, "bold"))
+    g_tag_lbl = tk.Label(summary_frame, text="", font=("Consolas", 9, "bold"), bd=0, padx=0)
+    g_val_lbl = tk.Label(summary_frame, text="", font=("Consolas", 9, "bold"), bd=0, padx=0)
+    sep_lbl = tk.Label(summary_frame, text="", font=("Consolas", 9), bd=0, padx=0)
+    c_tag_lbl = tk.Label(summary_frame, text="", font=("Consolas", 9, "bold"), bd=0, padx=0)
+    c_val_lbl = tk.Label(summary_frame, text="", font=("Consolas", 9, "bold"), bd=0, padx=0)
+    summary_lbl = tk.Label(summary_frame, text="AGY 连接中...", font=("Consolas", 9, "bold"), bd=0, padx=0)
+    summary_lbl.pack(side="left")
+
+    open_btn = tk.Label(bar_frame, text="↗", fg="#38bdf8", font=("Segoe UI", 10, "bold"))
     open_btn.pack(side="right")
 
-    detail_frame = tk.Frame(root, bg="#0f1728")
-    detail_text = tk.Label(
+    detail_frame = tk.Frame(root)
+    detail_text = tk.Text(
         detail_frame,
-        text="",
-        justify="left",
-        anchor="w",
-        fg="#cbd5e1",
-        bg="#0f1728",
+        width=40,
+        height=7,
+        relief="flat",
+        bd=0,
+        highlightthickness=0,
+        wrap="none",
+        cursor="arrow",
         font=("Consolas", 9),
+        state="disabled",
     )
     detail_text.pack(fill="x", padx=10, pady=(2, 6))
 
-    btn_row = tk.Frame(detail_frame, bg="#0f1728")
+    btn_row = tk.Frame(detail_frame)
     btn_row.pack(fill="x", padx=10, pady=(0, 8))
 
     def clamp_and_place(target_x: Optional[int] = None, target_y: Optional[int] = None, anchor_bottom_right: bool = False) -> None:
@@ -226,7 +330,7 @@ def main() -> int:
         except Exception:
             pass
 
-    tk.Button(
+    open_dash_btn = tk.Button(
         btn_row,
         text="打开完整监控台",
         command=open_web,
@@ -237,20 +341,55 @@ def main() -> int:
         padx=8,
         pady=2,
         cursor="hand2",
-    ).pack(side="left")
+    )
+    open_dash_btn.pack(side="left")
 
-    tk.Button(
+    quit_btn = tk.Button(
         btn_row,
         text="退出小工具",
         command=quit_widget,
-        bg="#1e293b",
-        fg="#94a3b8",
         relief="flat",
         font=("Microsoft YaHei UI", 8),
         padx=8,
         pady=2,
         cursor="hand2",
-    ).pack(side="right")
+    )
+    quit_btn.pack(side="right")
+
+    def apply_chrome() -> None:
+        pal = THEMES[_resolved_theme(state["theme_pref"])]
+        root.configure(bg=pal["bg"], highlightthickness=1, highlightbackground=pal["border"])
+        for widget in (bar_frame, summary_frame, detail_frame, btn_row):
+            widget.configure(bg=pal["bg"])
+        for widget in (dot_lbl, summary_lbl, g_tag_lbl, g_val_lbl, sep_lbl, c_tag_lbl, c_val_lbl, open_btn):
+            widget.configure(bg=pal["bg"])
+        summary_lbl.configure(fg=pal["fg"])
+        open_btn.configure(fg=pal["gem"])
+        detail_text.configure(bg=pal["bg"], fg=pal["muted"])
+        detail_text.tag_configure("gem", foreground=pal["gem"], font=("Consolas", 9, "bold"))
+        detail_text.tag_configure("cld", foreground=pal["cld"], font=("Consolas", 9, "bold"))
+        detail_text.tag_configure("ok", foreground=pal["ok"], font=("Consolas", 9, "bold"))
+        detail_text.tag_configure("warn", foreground=pal["warn"], font=("Consolas", 9, "bold"))
+        detail_text.tag_configure("crit", foreground=pal["crit"], font=("Consolas", 9, "bold"))
+        detail_text.tag_configure("expired", foreground=pal["expired"])
+        detail_text.tag_configure("muted", foreground=pal["muted"])
+        detail_text.tag_configure("fg", foreground=pal["fg"])
+        quit_btn.configure(bg=pal["btn"], fg=pal["btn_fg"])
+        ctx_menu.configure(bg=pal["bg"], fg=pal["fg"])
+
+    def _set_detail_segments(rows: list) -> None:
+        detail_text.configure(state="normal")
+        detail_text.delete("1.0", "end")
+        max_len = 36
+        for idx, segs in enumerate(rows):
+            line_len = 0
+            for text, tag in segs:
+                detail_text.insert("end", text, (tag,) if tag else ())
+                line_len += sum(2 if ord(ch) > 127 else 1 for ch in text)
+            max_len = max(max_len, line_len)
+            if idx < len(rows) - 1:
+                detail_text.insert("end", "\n")
+        detail_text.configure(width=min(46, max_len + 1), height=max(1, len(rows)), state="disabled")
 
     def toggle_expand(_evt: Any = None) -> None:
         old_x = root.winfo_x()
@@ -273,23 +412,38 @@ def main() -> int:
         ny = root.winfo_y() + evt.y - state["drag_y"]
         clamp_and_place(target_x=nx, target_y=ny)
 
-    for w in (bar_frame, dot_lbl, summary_lbl):
+    drag_targets = (bar_frame, summary_frame, dot_lbl, summary_lbl, g_tag_lbl, g_val_lbl, sep_lbl, c_tag_lbl, c_val_lbl)
+    for w in drag_targets:
         w.bind("<ButtonPress-1>", start_drag)
         w.bind("<B1-Motion>", on_drag)
         w.bind("<Double-Button-1>", toggle_expand)
 
-    ctx_menu = tk.Menu(root, tearoff=0, bg="#0f1728", fg="#edf2fb")
+    def set_theme_pref(pref: str) -> None:
+        state["theme_pref"] = pref
+        _write_theme_pref(pref)
+        apply_chrome()
+        if state.get("last_data") is not None:
+            apply_data(state["last_data"])
+
+    ctx_menu = tk.Menu(root, tearoff=0)
     ctx_menu.add_command(label="展开 / 收起详情 (双击)", command=toggle_expand)
     ctx_menu.add_command(label="打开完整 Web 监控台", command=open_web)
     ctx_menu.add_command(label="开启/关闭 80% 额度桌面提醒", command=toggle_notifications)
     ctx_menu.add_command(label="重置胶囊到右下角", command=reset_position)
     ctx_menu.add_separator()
+    ctx_menu.add_command(label="外观 · 浅色", command=lambda: set_theme_pref("light"))
+    ctx_menu.add_command(label="外观 · 通透", command=lambda: set_theme_pref("tongtou"))
+    ctx_menu.add_command(label="外观 · 深色", command=lambda: set_theme_pref("dark"))
+    ctx_menu.add_command(label="外观 · 跟随系统", command=lambda: set_theme_pref("system"))
+    ctx_menu.add_separator()
     ctx_menu.add_command(label="退出悬浮小工具", command=quit_widget)
+
+    apply_chrome()
 
     def show_menu(evt: Any) -> None:
         ctx_menu.tk_popup(evt.x_root, evt.y_root)
 
-    for w in (root, bar_frame, dot_lbl, summary_lbl):
+    for w in (root,) + drag_targets:
         w.bind("<Button-3>", show_menu)
     open_btn.bind("<Button-1>", open_web)
 
@@ -298,20 +452,29 @@ def main() -> int:
         f = int(round((pct / 100.0) * width))
         return "█" * f + "░" * (width - f)
 
+    def _show_plain_summary(text: str) -> None:
+        for w in (g_tag_lbl, g_val_lbl, sep_lbl, c_tag_lbl, c_val_lbl):
+            w.pack_forget()
+        summary_lbl.configure(text=text)
+        summary_lbl.pack(side="left")
+
     def apply_data(d: Optional[Dict[str, Any]]) -> None:
         if state["closing"]:
             return
+        state["last_data"] = d
+        pal = THEMES[_resolved_theme(state["theme_pref"])]
         try:
             if not d:
-                dot_lbl.configure(fg="#f59e0b")
-                summary_lbl.configure(text="AGY 离线 (双击)")
-                detail_text.configure(text="本地服务未响应，点击下方按钮启动。")
+                dot_lbl.configure(fg=pal["warn"])
+                _show_plain_summary("AGY 离线 (双击)")
+                _set_detail_segments([[("本地服务未响应，点击下方按钮启动。", "muted")]])
                 clamp_and_place(target_x=root.winfo_x(), target_y=root.winfo_y())
                 return
 
             state["notify_on"] = bool((d.get("notifications") or {}).get("enabled", False))
             q = d.get("quota") or {}
             buckets = q.get("buckets") or []
+            rows = []
             if q.get("has_live_quota") and buckets:
                 gem_w = next(
                     (b for b in buckets if str(b.get("pool_key", "")).startswith("gemini") and b.get("window_kind") == "weekly"),
@@ -321,40 +484,62 @@ def main() -> int:
                     (b for b in buckets if b.get("pool_key") == "claude_gpt" and b.get("window_kind") == "weekly"),
                     None,
                 )
-                parts = []
-                if gem_w and gem_w.get("used_pct") is not None:
-                    parts.append(f"G {gem_w['used_pct']:.0f}%")
-                if cld_w and cld_w.get("used_pct") is not None:
-                    parts.append(f"C {cld_w['used_pct']:.0f}%")
-                if not parts:
-                    parts.append(f"AGY {buckets[0].get('used_pct', 0):.0f}%")
+                has_g = gem_w is not None and gem_w.get("used_pct") is not None
+                has_c = cld_w is not None and cld_w.get("used_pct") is not None
 
                 statuses = [b.get("status") for b in buckets]
-                col = "#ef4444" if "critical" in statuses else ("#f59e0b" if "warning" in statuses else "#10b981")
+                col = pal["crit"] if "critical" in statuses else (pal["warn"] if "warning" in statuses else pal["ok"])
                 dot_lbl.configure(fg=col)
-                summary_lbl.configure(text=" │ ".join(parts))
 
-                lines = []
+                if has_g or has_c:
+                    summary_lbl.pack_forget()
+                    for w in (g_tag_lbl, g_val_lbl, sep_lbl, c_tag_lbl, c_val_lbl):
+                        w.pack_forget()
+                    if has_g and gem_w is not None:
+                        gu = float(gem_w["used_pct"])
+                        g_tag_lbl.configure(text="G ", fg=pal["gem"])
+                        g_val_lbl.configure(text=f"{gu:.0f}%", fg=_val_color(gu, bool(gem_w.get("reset_passed")), pal))
+                        g_tag_lbl.pack(side="left")
+                        g_val_lbl.pack(side="left")
+                    if has_g and has_c:
+                        sep_lbl.configure(text=" │ ", fg=pal["sep"])
+                        sep_lbl.pack(side="left")
+                    if has_c and cld_w is not None:
+                        cu = float(cld_w["used_pct"])
+                        c_tag_lbl.configure(text="C ", fg=pal["cld"])
+                        c_val_lbl.configure(text=f"{cu:.0f}%", fg=_val_color(cu, bool(cld_w.get("reset_passed")), pal))
+                        c_tag_lbl.pack(side="left")
+                        c_val_lbl.pack(side="left")
+                else:
+                    _show_plain_summary(f"AGY {buckets[0].get('used_pct', 0):.0f}%")
+
                 for b in buckets[:4]:
                     u = float(b.get("used_pct") or 0)
-                    pool = "Claude" if b.get("pool_key") == "claude_gpt" else "Gemini"
+                    exp = bool(b.get("reset_passed"))
+                    is_cld = b.get("pool_key") == "claude_gpt"
+                    pool = "Claude" if is_cld else "Gemini"
                     win = "5h" if b.get("window_kind") == "five_hour" else "周"
-                    rst = "待刷新" if b.get("reset_passed") else (b.get("reset_time_cst") or "-")
-                    lines.append(f"{pool}{win:<2} {ascii_bar(u)} 已用{u:5.1f}% ({rst})")
+                    rst = "待刷新" if exp else (b.get("reset_time_cst") or "-")
+                    val_tag = "expired" if exp else ("crit" if u >= 80.0 else ("warn" if u >= 55.0 else "ok"))
+                    rows.append([
+                        (f"{pool}{win:<2} ", "cld" if is_cld else "gem"),
+                        (f"{ascii_bar(u)} 已用{u:5.1f}%", val_tag),
+                        (f" ({rst})", "muted"),
+                    ])
             else:
                 wt = (d.get("windows") or {}).get("today") or {}
-                dot_lbl.configure(fg="#10b981")
-                summary_lbl.configure(text=f"AGY 今日 {fmt_tok(wt.get('billable_tokens', 0))}")
-                lines = ["等待新开的 Antigravity 会话推送实时额度"]
+                dot_lbl.configure(fg=pal["ok"])
+                _show_plain_summary(f"AGY 今日 {fmt_tok(wt.get('billable_tokens', 0))}")
+                rows.append([("等待新开的 Antigravity 会话推送实时额度", "muted")])
 
             w7 = (d.get("windows") or {}).get("7d") or {}
             wow = (d.get("week_over_week") or {}).get("badge_text") or ""
             wow_s = f" · {wow}" if wow else ""
             ntf_s = "开" if state["notify_on"] else "关"
-            lines.append("-" * 38)
-            lines.append(f"近7日有效: {fmt_tok(w7.get('billable_tokens', 0))}{wow_s}")
-            lines.append(f"提醒:{ntf_s} · 双击收起 · 拖动移动 · 右键菜单")
-            detail_text.configure(text="\n".join(lines))
+            rows.append([("-" * 38, "muted")])
+            rows.append([(f"近7日有效: {fmt_tok(w7.get('billable_tokens', 0))}{wow_s}", "fg")])
+            rows.append([(f"提醒:{ntf_s} · 双击收起 · 拖动移动 · 右键菜单", "muted")])
+            _set_detail_segments(rows)
             clamp_and_place(target_x=root.winfo_x(), target_y=root.winfo_y())
         except Exception:
             pass

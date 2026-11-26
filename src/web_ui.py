@@ -9,51 +9,100 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Antigravity · 实时用量与限额监控台</title>
+<script>
+(function () {
+  var p = localStorage.getItem('agy-usage-theme') || 'system';
+  var r = (p === 'light' || p === 'dark' || p === 'tongtou') ? p
+    : (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+  document.documentElement.setAttribute('data-theme', r);
+  document.documentElement.style.colorScheme = (r === 'dark') ? 'dark' : 'light';
+})();
+</script>
 <style>
   :root[data-theme="dark"] {
-    --bg: #080c15;
-    --bg-grad: radial-gradient(1000px 480px at 12% -10%, rgba(37, 99, 235, 0.13), transparent 60%),
-               radial-gradient(800px 420px at 88% -5%, rgba(124, 58, 237, 0.10), transparent 55%);
-    --panel: rgba(14, 20, 34, 0.88);
-    --panel-solid: #0e1422;
-    --panel-sub: rgba(20, 29, 48, 0.65);
-    --panel-hover: rgba(26, 37, 62, 0.85);
-    --border: rgba(148, 163, 184, 0.13);
-    --border-strong: rgba(56, 189, 248, 0.35);
+    color-scheme: dark;
+    --bg: #1e293b;
+    --bg-grad: radial-gradient(1000px 480px at 12% -10%, rgba(56, 189, 248, 0.12), transparent 60%),
+               radial-gradient(800px 420px at 88% -5%, rgba(139, 92, 246, 0.12), transparent 55%);
+    --panel: rgba(51, 65, 85, 0.78);
+    --panel-solid: #334155;
+    --panel-sub: rgba(30, 41, 59, 0.72);
+    --panel-hover: rgba(71, 85, 105, 0.55);
+    --border: rgba(226, 232, 240, 0.14);
+    --border-strong: rgba(56, 189, 248, 0.42);
     --text: #e2e8f0;
     --text-strong: #f8fafc;
-    --muted: #8494ad;
-    --chip-bg: rgba(11, 16, 28, 0.9);
-    --track: #1b2538;
-    --grid-line: rgba(148, 163, 184, 0.09);
-    --heat-0: #121a2b;
-    --heat-1: #154559;
-    --heat-2: #0369a1;
-    --heat-3: #0ea5e9;
-    --heat-4: #8b5cf6;
-    --shadow: 0 6px 22px rgba(0, 0, 0, 0.28);
+    --muted: #94a3b8;
+    --chip-bg: rgba(30, 41, 59, 0.72);
+    --track: #475569;
+    --grid-line: rgba(226, 232, 240, 0.10);
+    --heat-0: #334155;
+    --heat-1: #155e75;
+    --heat-2: #0284c7;
+    --heat-3: #38bdf8;
+    --heat-4: #a78bfa;
+    --shadow: 0 6px 22px rgba(15, 23, 42, 0.28);
+    --tip-bg: rgba(51, 65, 85, 0.96);
+    --marker: #f8fafc;
   }
   :root[data-theme="light"] {
-    --bg: #f4f7fb;
-    --bg-grad: radial-gradient(900px 400px at 10% -10%, rgba(37, 99, 235, 0.08), transparent 60%);
-    --panel: rgba(255, 255, 255, 0.94);
-    --panel-solid: #ffffff;
-    --panel-sub: #f8fafc;
-    --panel-hover: #f1f5f9;
-    --border: rgba(15, 23, 42, 0.09);
-    --border-strong: rgba(37, 99, 235, 0.35);
-    --text: #1e293b;
-    --text-strong: #0f172a;
-    --muted: #64748b;
-    --chip-bg: #f1f5f9;
-    --track: #e2e8f0;
-    --grid-line: rgba(15, 23, 42, 0.07);
-    --heat-0: #eaeff7;
-    --heat-1: #bae6fd;
-    --heat-2: #38bdf8;
-    --heat-3: #2563eb;
-    --heat-4: #7c3aed;
-    --shadow: 0 4px 16px rgba(15, 23, 42, 0.05);
+    color-scheme: light;
+    --bg: #fff5f8;
+    --bg-grad:
+      radial-gradient(920px 540px at 6% -12%, rgba(255, 183, 197, 0.62), transparent 58%),
+      radial-gradient(760px 500px at 96% -8%, rgba(196, 181, 253, 0.48), transparent 56%),
+      radial-gradient(640px 420px at 48% 108%, rgba(125, 211, 252, 0.30), transparent 52%),
+      linear-gradient(165deg, #fff8fb 0%, #fdeef6 42%, #f3e8ff 100%);
+    --panel: rgba(255, 255, 255, 0.38);
+    --panel-solid: rgba(255, 252, 254, 0.72);
+    --panel-sub: rgba(255, 255, 255, 0.28);
+    --panel-hover: rgba(255, 255, 255, 0.55);
+    --border: rgba(255, 255, 255, 0.66);
+    --border-strong: rgba(244, 114, 182, 0.42);
+    --text: #4a3540;
+    --text-strong: #3a2430;
+    --muted: #745664;
+    --chip-bg: rgba(255, 255, 255, 0.36);
+    --track: rgba(244, 114, 182, 0.16);
+    --grid-line: rgba(244, 114, 182, 0.12);
+    --heat-0: #fce7f3;
+    --heat-1: #fbcfe8;
+    --heat-2: #f9a8d4;
+    --heat-3: #e879f9;
+    --heat-4: #c4b5fd;
+    --shadow: 0 10px 34px rgba(244, 114, 182, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.78);
+    --tip-bg: rgba(255, 252, 254, 0.62);
+    --marker: #be185d;
+    --glass-blur: 18px;
+  }
+  :root[data-theme="tongtou"] {
+    color-scheme: light;
+    --bg: #F5F0EB;
+    --bg-grad:
+      radial-gradient(760px 520px at 8% -8%, rgba(123, 167, 167, 0.28), transparent 70%),
+      radial-gradient(640px 460px at 94% 4%, rgba(196, 168, 130, 0.24), transparent 68%),
+      linear-gradient(180deg, #F5F0EB 0%, #F3EDE6 100%);
+    --panel: rgba(255, 253, 251, 0.76);
+    --panel-solid: rgba(255, 253, 251, 0.94);
+    --panel-sub: rgba(255, 253, 251, 0.58);
+    --panel-hover: rgba(255, 253, 251, 0.88);
+    --border: rgba(232, 226, 219, 0.92);
+    --border-strong: rgba(123, 167, 167, 0.55);
+    --text: #4A4A4A;
+    --text-strong: #2C3E50;
+    --muted: rgba(74, 74, 74, 0.64);
+    --chip-bg: rgba(255, 253, 251, 0.86);
+    --track: #E8E2DB;
+    --grid-line: rgba(232, 226, 219, 0.9);
+    --heat-0: #EDE6DE;
+    --heat-1: #C9D6D6;
+    --heat-2: #7BA7A7;
+    --heat-3: #C4A882;
+    --heat-4: #2C3E50;
+    --shadow: 0 16px 36px rgba(44, 62, 80, 0.08);
+    --tip-bg: rgba(255, 253, 251, 0.86);
+    --marker: #7BA7A7;
+    --glass-blur: 18px;
   }
   :root {
     --cyan: #38bdf8;
@@ -200,8 +249,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .dual-bar { position: relative; height: 6px; border-radius: 99px; background: var(--track); margin: 5px 0; }
   .dual-fill { height: 100%; border-radius: 99px; transition: width .3s ease; }
   .time-marker {
-    position: absolute; top: -2px; bottom: -2px; width: 2px; background: #fff;
-    border-radius: 1px; box-shadow: 0 0 4px rgba(0,0,0,0.6);
+    position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--marker);
+    border-radius: 1px; box-shadow: 0 0 4px rgba(15, 23, 42, 0.35);
   }
   .b-meta {
     display: flex; flex-wrap: wrap; justify-content: space-between; gap: 3px 10px;
@@ -268,9 +317,9 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   /* Floating Glass Tooltip */
   #tip {
     position: fixed; pointer-events: none; z-index: 9999; display: none;
-    background: rgba(9, 13, 24, 0.95); color: #e2e8f0; border: 1px solid rgba(56, 189, 248, 0.35);
+    background: var(--tip-bg); color: var(--text); border: 1px solid var(--border-strong);
     border-radius: 8px; padding: 7px 10px; font-size: 11px; line-height: 1.45;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.45); max-width: 260px; backdrop-filter: blur(8px);
+    box-shadow: var(--shadow); max-width: 260px; backdrop-filter: blur(8px);
   }
   #tip .th { font-weight: 650; color: var(--cyan); margin-bottom: 2px; }
 
@@ -304,6 +353,101 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   }
 
   .footnote { font-size: 10.5px; color: var(--muted); margin-top: 12px; text-align: right; }
+
+  :root[data-theme="light"] .logo {
+    background: linear-gradient(135deg, #fb7185, #f472b6 48%, #c4b5fd);
+  }
+  :root[data-theme="light"] .card,
+  :root[data-theme="light"] .status-strip,
+  :root[data-theme="light"] .ichip,
+  :root[data-theme="light"] .pills,
+  :root[data-theme="light"] .btn,
+  :root[data-theme="light"] .bucket-item,
+  :root[data-theme="light"] .code-chip,
+  :root[data-theme="light"] .modal,
+  :root[data-theme="light"] .drawer {
+    background: var(--panel);
+    backdrop-filter: blur(var(--glass-blur)) saturate(1.45);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.45);
+    box-shadow: var(--shadow);
+  }
+  :root[data-theme="light"] .card { border-radius: 16px; }
+  :root[data-theme="light"] .status-strip {
+    border-radius: 14px;
+    background: rgba(255, 252, 254, 0.80);
+    border-color: rgba(244, 114, 182, 0.36);
+    box-shadow: 0 6px 20px rgba(244, 114, 182, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  }
+  :root[data-theme="light"] .status-strip .kv .k { color: #664957; font-weight: 550; }
+  :root[data-theme="light"] .status-strip .code-chip {
+    background: rgba(255, 255, 255, 0.86);
+    border-color: rgba(14, 116, 144, 0.34);
+    color: #0e7490;
+  }
+  :root[data-theme="light"] .ichip { border-radius: 14px; }
+  :root[data-theme="light"] .pill.active {
+    background: linear-gradient(135deg, #fb7185, #e879f9);
+    color: #fff;
+  }
+  :root[data-theme="light"] .btn.primary {
+    background: linear-gradient(135deg, #fb7185, #e879f9);
+    color: #fff;
+  }
+  :root[data-theme="light"] .card.pool-gemini { border-top-color: rgba(244, 114, 182, 0.55); }
+  :root[data-theme="light"] .card.pool-claude { border-top-color: rgba(196, 181, 253, 0.7); }
+  :root[data-theme="light"] header { border-bottom-color: rgba(255, 255, 255, 0.45); }
+  :root[data-theme="light"] .backdrop { background: rgba(253, 232, 240, 0.42); }
+  @media (prefers-reduced-transparency: reduce) {
+    :root[data-theme="light"] .card,
+    :root[data-theme="light"] .status-strip,
+    :root[data-theme="light"] .ichip,
+    :root[data-theme="light"] .pills,
+    :root[data-theme="light"] .btn,
+    :root[data-theme="light"] .bucket-item,
+    :root[data-theme="light"] .code-chip,
+    :root[data-theme="light"] .modal,
+    :root[data-theme="light"] .drawer {
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      background: rgba(255, 252, 254, 0.94);
+    }
+  }
+  :root[data-theme="tongtou"] .logo {
+    background: linear-gradient(135deg, rgba(123, 167, 167, 0.92) 0%, #7BA7A7 100%);
+  }
+  :root[data-theme="tongtou"] .card,
+  :root[data-theme="tongtou"] .status-strip,
+  :root[data-theme="tongtou"] .ichip,
+  :root[data-theme="tongtou"] .pills,
+  :root[data-theme="tongtou"] .btn,
+  :root[data-theme="tongtou"] .bucket-item,
+  :root[data-theme="tongtou"] .code-chip,
+  :root[data-theme="tongtou"] .modal,
+  :root[data-theme="tongtou"] .drawer {
+    background: var(--panel);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    box-shadow: var(--shadow);
+  }
+  :root[data-theme="tongtou"] .card { border-radius: 16px; }
+  :root[data-theme="tongtou"] .status-strip,
+  :root[data-theme="tongtou"] .ichip { border-radius: 16px; }
+  :root[data-theme="tongtou"] .pills,
+  :root[data-theme="tongtou"] .btn { border-radius: 999px; }
+  :root[data-theme="tongtou"] .pill.active {
+    background: linear-gradient(135deg, rgba(123, 167, 167, 0.92) 0%, #7BA7A7 100%);
+    color: #fdfbf8;
+  }
+  :root[data-theme="tongtou"] .btn.primary {
+    background: linear-gradient(135deg, rgba(123, 167, 167, 0.92) 0%, #7BA7A7 100%);
+    color: #fdfbf8;
+    box-shadow: 0 18px 42px rgba(123, 167, 167, 0.28);
+  }
+  :root[data-theme="tongtou"] .card.pool-gemini { border-top-color: rgba(123, 167, 167, 0.7); }
+  :root[data-theme="tongtou"] .card.pool-claude { border-top-color: rgba(196, 168, 130, 0.7); }
+  :root[data-theme="tongtou"] header { border-bottom-color: rgba(232, 226, 219, 0.88); }
+  :root[data-theme="tongtou"] .backdrop { background: rgba(245, 240, 235, 0.48); }
+  :root[data-theme="tongtou"] h1 { letter-spacing: 0.04em; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -375,7 +519,12 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <button class="btn" id="notify-btn" title="开启或关闭 80%/95% 额度提醒与回血桌面通知">🔔 提醒: 关</button>
       <button class="btn" id="open-modal-btn">＋录入限额</button>
       <button class="btn" id="export-btn">导出 CSV</button>
-      <button class="btn" id="theme-btn">☀ 亮色</button>
+      <div class="pills" id="theme-pills" title="外观">
+        <button class="pill" type="button" data-theme-pref="light">浅色</button>
+        <button class="pill" type="button" data-theme-pref="tongtou">通透</button>
+        <button class="pill" type="button" data-theme-pref="dark">深色</button>
+        <button class="pill" type="button" data-theme-pref="system">系统</button>
+      </div>
     </div>
   </header>
 
@@ -532,12 +681,27 @@ let lastData = null;
 let convSortKey = 'billable_tokens';
 let convSortDir = -1;
 
-// Theme setup
-(function initTheme() {
-  const saved = localStorage.getItem('agy-usage-theme') || 'dark';
-  document.documentElement.setAttribute('data-theme', saved);
-  document.getElementById('theme-btn').textContent = saved === 'dark' ? '☀ 亮色' : '☾ 暗色';
-})();
+const THEME_KEY = 'agy-usage-theme';
+function prefTheme() {
+  const v = localStorage.getItem(THEME_KEY);
+  return (v === 'light' || v === 'dark' || v === 'system' || v === 'tongtou') ? v : 'system';
+}
+function resolvedTheme(pref) {
+  if (pref === 'light' || pref === 'dark' || pref === 'tongtou') return pref;
+  return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+}
+function applyTheme() {
+  const pref = prefTheme();
+  const resolved = resolvedTheme(pref);
+  document.documentElement.setAttribute('data-theme', resolved);
+  document.documentElement.setAttribute('data-theme-pref', pref);
+  document.documentElement.style.colorScheme = (resolved === 'dark') ? 'dark' : 'light';
+  document.querySelectorAll('#theme-pills [data-theme-pref]').forEach((btn) => {
+    btn.classList.toggle('active', btn.getAttribute('data-theme-pref') === pref);
+  });
+}
+applyTheme();
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
 
 function esc(s) {
   return String(s == null ? '' : s)
@@ -1270,12 +1434,11 @@ document.getElementById('export-btn').addEventListener('click', () => {
   window.location.href = '/api/export.csv?window=' + encodeURIComponent(currentWin);
 });
 
-document.getElementById('theme-btn').addEventListener('click', () => {
-  const cur = document.documentElement.getAttribute('data-theme') || 'dark';
-  const next = cur === 'dark' ? 'light' : 'dark';
-  document.documentElement.setAttribute('data-theme', next);
-  localStorage.setItem('agy-usage-theme', next);
-  document.getElementById('theme-btn').textContent = next === 'dark' ? '☀ 亮色' : '☾ 暗色';
+document.getElementById('theme-pills').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-theme-pref]');
+  if (!btn) return;
+  localStorage.setItem(THEME_KEY, btn.getAttribute('data-theme-pref'));
+  applyTheme();
 });
 
 document.getElementById('mq-save-btn').addEventListener('click', async () => {

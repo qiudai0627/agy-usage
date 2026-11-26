@@ -110,7 +110,96 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let showPillKey = "AGYUsageShowFloatingPill"
     private let pillXKey = "AGYUsagePillOriginX"
     private let pillYKey = "AGYUsagePillOriginY"
+    private let appearanceKey = "AGYUsageAppearance"
     private let pillHeight: CGFloat = 28
+
+    private struct ThemePalette {
+        let gemTag: NSColor
+        let cldTag: NSColor
+        let sep: NSColor
+        let ok: NSColor
+        let warn: NSColor
+        let crit: NSColor
+        let expired: NSColor
+        let border: NSColor
+        let tint: NSColor
+    }
+
+    private static func hexColor(_ hex: UInt32, alpha: CGFloat = 1.0) -> NSColor {
+        let r = CGFloat((hex >> 16) & 0xFF) / 255.0
+        let g = CGFloat((hex >> 8) & 0xFF) / 255.0
+        let b = CGFloat(hex & 0xFF) / 255.0
+        return NSColor(srgbRed: r, green: g, blue: b, alpha: alpha)
+    }
+
+    private var appearancePref: String {
+        get {
+            let v = UserDefaults.standard.string(forKey: appearanceKey) ?? "system"
+            if v == "light" || v == "tongtou" || v == "dark" || v == "system" { return v }
+            return "system"
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: appearanceKey)
+            applyAppearance()
+        }
+    }
+
+    private func resolvedTheme(for appearance: NSAppearance? = nil) -> String {
+        if appearancePref == "light" || appearancePref == "tongtou" || appearancePref == "dark" {
+            return appearancePref
+        }
+        let eff = appearance ?? pillView?.effectiveAppearance ?? NSApp.effectiveAppearance
+        let isDark = eff.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        return isDark ? "dark" : "light"
+    }
+
+    private func palette(for theme: String) -> ThemePalette {
+        switch theme {
+        case "light":
+            return ThemePalette(
+                gemTag: Self.hexColor(0x0E7490),
+                cldTag: Self.hexColor(0x6D28D9),
+                sep: Self.hexColor(0x9A7B88, alpha: 0.72),
+                ok: Self.hexColor(0x059669),
+                warn: Self.hexColor(0xD97706),
+                crit: Self.hexColor(0xDC2626),
+                expired: Self.hexColor(0x6B7280),
+                border: Self.hexColor(0xF472B6, alpha: 0.45),
+                tint: Self.hexColor(0xFFF5F8, alpha: 0.22)
+            )
+        case "tongtou":
+            return ThemePalette(
+                gemTag: Self.hexColor(0x4D7C7C),
+                cldTag: Self.hexColor(0x9A7B4F),
+                sep: Self.hexColor(0x78716C, alpha: 0.65),
+                ok: Self.hexColor(0x059669),
+                warn: Self.hexColor(0xD97706),
+                crit: Self.hexColor(0xDC2626),
+                expired: Self.hexColor(0x78716C),
+                border: Self.hexColor(0x7BA7A7, alpha: 0.55),
+                tint: Self.hexColor(0xF5F0EB, alpha: 0.30)
+            )
+        default:
+            return ThemePalette(
+                gemTag: Self.hexColor(0x38BDF8),
+                cldTag: Self.hexColor(0xA78BFA),
+                sep: Self.hexColor(0x94A3B8, alpha: 0.65),
+                ok: Self.hexColor(0x34D399),
+                warn: Self.hexColor(0xFBBF24),
+                crit: Self.hexColor(0xF87171),
+                expired: Self.hexColor(0x94A3B8),
+                border: Self.hexColor(0x38BDF8, alpha: 0.34),
+                tint: NSColor.clear
+            )
+        }
+    }
+
+    private func valueColor(usedPct: Double, expired: Bool, pal: ThemePalette) -> NSColor {
+        if expired { return pal.expired }
+        if usedPct >= 80.0 { return pal.crit }
+        if usedPct >= 55.0 { return pal.warn }
+        return pal.ok
+    }
 
     private var showFloatingPill: Bool {
         get {
@@ -170,6 +259,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         setupFloatingPill()
+        applyAppearance()
         updateIndicators(compactBar: "AGY", pillText: "AGY 连接中…", level: "ok")
         rebuildMenu()
         updatePillVisibility()
@@ -284,17 +374,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pillView.material = .hudWindow
         pillView.blendingMode = .behindWindow
         pillView.state = .active
-        pillView.appearance = NSAppearance(named: .vibrantDark)
         pillView.wantsLayer = true
         pillView.layer?.cornerRadius = h / 2
         pillView.layer?.masksToBounds = true
         pillView.layer?.borderWidth = 1.0
-        pillView.layer?.borderColor = NSColor(calibratedWhite: 1.0, alpha: 0.16).cgColor
 
         pillLabel = NSTextField(labelWithString: "● AGY")
         pillLabel.alignment = .center
         pillLabel.frame = NSRect(x: 10, y: 5, width: w - 20, height: 18)
-        pillLabel.textColor = .white
+        pillLabel.textColor = .labelColor
         pillView.addSubview(pillLabel)
 
         pillView.onClick = { [weak self] in
@@ -349,18 +437,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return String(repeating: "█", count: filled) + String(repeating: "░", count: max(0, width - filled))
     }
 
-    private func updateIndicators(compactBar: String, pillText: String, level: String) {
-        let dotColor: NSColor
+    private func dotColor(for level: String, pal: ThemePalette) -> NSColor {
         switch level {
-        case "critical": dotColor = NSColor.systemRed
-        case "warning": dotColor = NSColor.systemOrange
-        default: dotColor = NSColor.systemGreen
+        case "critical": return pal.crit
+        case "warning": return pal.warn
+        default: return pal.ok
         }
+    }
+
+    private func updateIndicators(compactBar: String, pillText: String, level: String) {
+        let pal = palette(for: resolvedTheme())
+        let dot = dotColor(for: level, pal: pal)
 
         if let button = statusItem.button {
+            let barPal = palette(for: resolvedTheme(for: button.effectiveAppearance))
             let attr = NSMutableAttributedString()
             attr.append(NSAttributedString(string: "●", attributes: [
-                .foregroundColor: dotColor,
+                .foregroundColor: dotColor(for: level, pal: barPal),
                 .font: NSFont.systemFont(ofSize: 9.5, weight: .bold)
             ]))
             attr.append(NSAttributedString(string: compactBar, attributes: [
@@ -371,13 +464,77 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let pillAttr = NSMutableAttributedString()
         pillAttr.append(NSAttributedString(string: "● ", attributes: [
-            .foregroundColor: dotColor,
+            .foregroundColor: dot,
             .font: NSFont.systemFont(ofSize: 10.5, weight: .bold)
         ]))
         pillAttr.append(NSAttributedString(string: pillText, attributes: [
-            .foregroundColor: NSColor.white,
+            .foregroundColor: NSColor.labelColor,
             .font: NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .semibold)
         ]))
+        pillLabel.attributedStringValue = pillAttr
+        resizePill(toFit: pillAttr)
+    }
+
+    private func updateQuotaIndicators(gem: QuotaBucket?, cld: QuotaBucket?, fallback: QuotaBucket?, level: String) {
+        let pillPal = palette(for: resolvedTheme())
+        let pillFont = NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .semibold)
+        let pillTagFont = NSFont.systemFont(ofSize: 11.5, weight: .bold)
+        let barFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        let barTagFont = NSFont.systemFont(ofSize: 11, weight: .semibold)
+
+        let pillAttr = NSMutableAttributedString()
+        pillAttr.append(NSAttributedString(string: "● ", attributes: [
+            .foregroundColor: dotColor(for: level, pal: pillPal),
+            .font: NSFont.systemFont(ofSize: 10.5, weight: .bold)
+        ]))
+
+        let barPal = palette(for: resolvedTheme(for: statusItem.button?.effectiveAppearance))
+        let barAttr = NSMutableAttributedString()
+        barAttr.append(NSAttributedString(string: "●", attributes: [
+            .foregroundColor: dotColor(for: level, pal: barPal),
+            .font: NSFont.systemFont(ofSize: 9.5, weight: .bold)
+        ]))
+
+        var hasAny = false
+        let appendPair = { (tag: String, bucket: QuotaBucket, isGem: Bool, includeBarPct: Bool) in
+            guard let u = bucket.used_pct else { return }
+            let exp = bucket.reset_passed == true
+            if hasAny {
+                pillAttr.append(NSAttributedString(string: " │ ", attributes: [.foregroundColor: pillPal.sep, .font: pillFont]))
+                barAttr.append(NSAttributedString(string: "│", attributes: [.foregroundColor: barPal.sep, .font: barFont]))
+            }
+            let pTagCol = isGem ? pillPal.gemTag : pillPal.cldTag
+            let bTagCol = isGem ? barPal.gemTag : barPal.cldTag
+            let pValCol = self.valueColor(usedPct: u, expired: exp, pal: pillPal)
+            let bValCol = self.valueColor(usedPct: u, expired: exp, pal: barPal)
+
+            pillAttr.append(NSAttributedString(string: "\(tag) ", attributes: [.foregroundColor: pTagCol, .font: pillTagFont]))
+            pillAttr.append(NSAttributedString(string: String(format: "%.0f%%", u), attributes: [.foregroundColor: pValCol, .font: pillFont]))
+
+            barAttr.append(NSAttributedString(string: tag, attributes: [.foregroundColor: bTagCol, .font: barTagFont]))
+            let barValFmt = includeBarPct ? "%.0f%%" : "%.0f"
+            barAttr.append(NSAttributedString(string: String(format: barValFmt, u), attributes: [.foregroundColor: bValCol, .font: barFont]))
+            hasAny = true
+        }
+
+        let hasBoth = (gem?.used_pct != nil) && (cld?.used_pct != nil)
+        if let g = gem {
+            appendPair("G", g, true, !hasBoth)
+        }
+        if let c = cld {
+            appendPair("C", c, false, true)
+        }
+        if !hasAny, let first = fallback, let u = first.used_pct {
+            let exp = first.reset_passed == true
+            let isGem = (first.pool_key ?? "").hasPrefix("gemini")
+            pillAttr.append(NSAttributedString(string: "AGY ", attributes: [.foregroundColor: isGem ? pillPal.gemTag : pillPal.cldTag, .font: pillTagFont]))
+            pillAttr.append(NSAttributedString(string: String(format: "%.0f%%", u), attributes: [.foregroundColor: valueColor(usedPct: u, expired: exp, pal: pillPal), .font: pillFont]))
+            barAttr.append(NSAttributedString(string: String(format: "%.0f%%", u), attributes: [.foregroundColor: valueColor(usedPct: u, expired: exp, pal: barPal), .font: barFont]))
+        }
+
+        if let button = statusItem.button {
+            button.attributedTitle = barAttr
+        }
         pillLabel.attributedStringValue = pillAttr
         resizePill(toFit: pillAttr)
     }
@@ -423,31 +580,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let gemW = st.quota.buckets.first { ($0.pool_key ?? "").hasPrefix("gemini") && $0.window_kind == "weekly" }
             let cldW = st.quota.buckets.first { $0.pool_key == "claude_gpt" && $0.window_kind == "weekly" }
 
-            var pillParts: [String] = []
-            var barParts: [String] = []
-            if let g = gemW, let u = g.used_pct {
-                pillParts.append(String(format: "G %.0f%%", u))
-                barParts.append(String(format: "%.0f%%", u))
-            }
-            if let c = cldW, let u = c.used_pct {
-                pillParts.append(String(format: "C %.0f%%", u))
-                barParts.append(String(format: "%.0f%%", u))
-            }
-            if pillParts.isEmpty, let first = st.quota.buckets.first, let u = first.used_pct {
-                pillParts.append(String(format: "AGY %.0f%%", u))
-                barParts.append(String(format: "%.0f%%", u))
-            }
-
             var worst = "ok"
             for b in st.quota.buckets {
                 if b.status == "critical" { worst = "critical"; break }
                 if b.status == "warning" { worst = "warning" }
             }
-            updateIndicators(
-                compactBar: barParts.joined(separator: "│"),
-                pillText: pillParts.joined(separator: " │ "),
-                level: worst
-            )
+            updateQuotaIndicators(gem: gemW, cld: cldW, fallback: st.quota.buckets.first, level: worst)
         } else {
             let todayTok = st.windows["today"]?.billable_tokens ?? 0
             let tokStr = fmtTokens(todayTok)
@@ -455,15 +593,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func makeDisabledItem(_ title: String, monospaced: Bool = false) -> NSMenuItem {
+    private func makeDisabledItem(_ title: String, monospaced: Bool = false, color: NSColor? = nil, bold: Bool = false) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         item.isEnabled = false
-        if monospaced {
+        if monospaced || color != nil || bold {
+            let font: NSFont = monospaced
+                ? NSFont.monospacedSystemFont(ofSize: 11, weight: bold ? .semibold : .regular)
+                : NSFont.systemFont(ofSize: 11.5, weight: bold ? .semibold : .regular)
             item.attributedTitle = NSAttributedString(string: title, attributes: [
-                .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
-                .foregroundColor: NSColor.labelColor
+                .font: font,
+                .foregroundColor: color ?? NSColor.labelColor
             ])
         }
+        return item
+    }
+
+    private func makeBucketMenuItem(_ b: QuotaBucket, pal: ThemePalette) -> NSMenuItem {
+        let used = b.used_pct ?? 0.0
+        let exp = b.reset_passed == true
+        let tag = b.window_kind == "five_hour" ? "当前5h" : "每周7d"
+        let rst = exp ? "待刷新" : "重置 \(b.reset_time_cst ?? "-")"
+        let mono = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        let monoBold = NSFont.monospacedSystemFont(ofSize: 11, weight: .semibold)
+        let valCol = valueColor(usedPct: used, expired: exp, pal: pal)
+
+        let attr = NSMutableAttributedString()
+        attr.append(NSAttributedString(string: "  \(tag)  ", attributes: [.font: mono, .foregroundColor: NSColor.labelColor]))
+        attr.append(NSAttributedString(string: asciiBar(used), attributes: [.font: mono, .foregroundColor: valCol]))
+        attr.append(NSAttributedString(string: String(format: "  已用 %5.1f%%", used), attributes: [.font: monoBold, .foregroundColor: valCol]))
+        attr.append(NSAttributedString(string: "  (\(rst))", attributes: [.font: mono, .foregroundColor: NSColor.secondaryLabelColor]))
+
+        let item = NSMenuItem(title: attr.string, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        item.attributedTitle = attr
         return item
     }
 
@@ -483,29 +645,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(NSMenuItem.separator())
 
             if st.quota.has_live_quota {
+                let pal = palette(for: resolvedTheme())
                 let gemBuckets = st.quota.buckets.filter { ($0.pool_key ?? "").hasPrefix("gemini") }
                 let cldBuckets = st.quota.buckets.filter { $0.pool_key == "claude_gpt" }
 
                 if !gemBuckets.isEmpty {
-                    menu.addItem(makeDisabledItem("▸ Google Gemini 模型池"))
+                    menu.addItem(makeDisabledItem("▸ Google Gemini 模型池", color: pal.gemTag, bold: true))
                     for b in gemBuckets {
-                        let used = b.used_pct ?? 0.0
-                        let tag = b.window_kind == "five_hour" ? "当前5h" : "每周7d"
-                        let rst = (b.reset_passed == true) ? "待刷新" : "重置 \(b.reset_time_cst ?? "-")"
-                        let line = String(format: "  %@  %@  已用 %5.1f%%  (%@)", tag, asciiBar(used), used, rst)
-                        menu.addItem(makeDisabledItem(line, monospaced: true))
+                        menu.addItem(makeBucketMenuItem(b, pal: pal))
                     }
                 }
 
                 if !cldBuckets.isEmpty {
                     if !gemBuckets.isEmpty { menu.addItem(NSMenuItem.separator()) }
-                    menu.addItem(makeDisabledItem("▸ Claude / GPT 第三方池"))
+                    menu.addItem(makeDisabledItem("▸ Claude / GPT 第三方池", color: pal.cldTag, bold: true))
                     for b in cldBuckets {
-                        let used = b.used_pct ?? 0.0
-                        let tag = b.window_kind == "five_hour" ? "当前5h" : "每周7d"
-                        let rst = (b.reset_passed == true) ? "待刷新" : "重置 \(b.reset_time_cst ?? "-")"
-                        let line = String(format: "  %@  %@  已用 %5.1f%%  (%@)", tag, asciiBar(used), used, rst)
-                        menu.addItem(makeDisabledItem(line, monospaced: true))
+                        menu.addItem(makeBucketMenuItem(b, pal: pal))
                     }
                 }
             } else {
@@ -537,6 +692,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let refItem = NSMenuItem(title: "立即刷新", action: #selector(manualRefresh), keyEquivalent: "r")
         refItem.target = self
         menu.addItem(refItem)
+
+        let appearMenu = NSMenu()
+        for pair in [("浅色", "light"), ("通透", "tongtou"), ("深色", "dark"), ("跟随系统", "system")] {
+            let it = NSMenuItem(title: pair.0, action: #selector(setAppearancePref(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = pair.1
+            it.state = appearancePref == pair.1 ? .on : .off
+            appearMenu.addItem(it)
+        }
+        let appearRoot = NSMenuItem(title: "外观", action: nil, keyEquivalent: "")
+        appearRoot.submenu = appearMenu
+        menu.addItem(appearRoot)
 
         let pillToggle = NSMenuItem(title: "显示桌面悬浮胶囊（防刘海遮挡）", action: #selector(togglePill), keyEquivalent: "")
         pillToggle.target = self
@@ -585,6 +752,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func manualRefresh() {
         fetchStats(autoStartDaemon: true)
+    }
+
+    private func applyAppearance() {
+        switch appearancePref {
+        case "dark":
+            NSApp.appearance = NSAppearance(named: .darkAqua)
+            if pillView != nil {
+                pillView.appearance = NSAppearance(named: .vibrantDark)
+            }
+        case "light", "tongtou":
+            NSApp.appearance = NSAppearance(named: .aqua)
+            if pillView != nil {
+                pillView.appearance = NSAppearance(named: .vibrantLight)
+            }
+        default:
+            NSApp.appearance = nil
+            if pillView != nil {
+                pillView.appearance = nil
+            }
+        }
+        refreshPillChrome()
+    }
+
+    private func refreshPillChrome() {
+        guard pillView != nil else { return }
+        let pal = palette(for: resolvedTheme())
+        pillView.layer?.borderColor = pal.border.cgColor
+        pillView.layer?.backgroundColor = pal.tint.cgColor
+    }
+
+    @objc private func setAppearancePref(_ sender: NSMenuItem) {
+        guard let val = sender.representedObject as? String else { return }
+        appearancePref = val
+        rebuildMenu()
+        if let st = lastStats {
+            applyStats(st)
+        }
     }
 
     @objc private func togglePill() {

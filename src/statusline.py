@@ -260,10 +260,12 @@ def _fmt_pct(u: float, tight: bool = False) -> str:
 def _render_slot(s: Dict[str, Any], tier: int) -> str:
     """Render one bucket at tier 0 (richest) .. tier 4 (tightest), never dropping the bucket."""
     lbl = s["full"] if tier <= 2 else s["short"]
+    pool_col = CYAN if s["key"].startswith("g") else MAGENTA
+    lbl_s = f"{pool_col}{lbl}{RESET}"
     if s["state"] == "missing":
-        return f"{lbl} {DIM}—{RESET}" if tier <= 3 else f"{lbl}:{DIM}—{RESET}"
+        return f"{lbl_s} {DIM}—{RESET}" if tier <= 3 else f"{lbl_s}:{DIM}—{RESET}"
     if s["state"] == "expired":
-        return f"{lbl} {DIM}待刷新{RESET}" if tier <= 2 else f"{lbl}:{DIM}待刷{RESET}"
+        return f"{lbl_s} {DIM}待刷新{RESET}" if tier <= 2 else f"{lbl_s}:{DIM}待刷{RESET}"
 
     u = float(s["used_pct"])
     col = used_color(u)
@@ -274,15 +276,15 @@ def _render_slot(s: Dict[str, Any], tier: int) -> str:
             rst = f" {DIM}{fmt_cst(s['reset_dt'], '%m-%d %H:%M')}{RESET}"
         elif s.get("reset_sec") is not None:
             rst = f" {DIM}{short_countdown(s['reset_sec'])}{RESET}"
-        return f"{lbl} {bar_s}{col}已用{_fmt_pct(u)}{RESET}{rst}"
+        return f"{lbl_s} {bar_s}{col}已用{_fmt_pct(u)}{RESET}{rst}"
     if tier == 1:
         bar_s = f"{col}{mini_bar(u, 4)}{RESET} "
-        return f"{lbl} {bar_s}{col}已用{_fmt_pct(u)}{RESET}"
+        return f"{lbl_s} {bar_s}{col}已用{_fmt_pct(u)}{RESET}"
     if tier == 2:
-        return f"{lbl} {col}已用{_fmt_pct(u)}{RESET}"
+        return f"{lbl_s} {col}已用{_fmt_pct(u)}{RESET}"
     if tier == 3:
-        return f"{lbl} {col}已用{_fmt_pct(u, tight=True)}{RESET}"
-    return f"{lbl}{col}已用{_fmt_pct(u, tight=True)}{RESET}"
+        return f"{lbl_s} {col}已用{_fmt_pct(u, tight=True)}{RESET}"
+    return f"{lbl_s}{col}已用{_fmt_pct(u, tight=True)}{RESET}"
 
 
 def _render_candidate(
@@ -345,15 +347,15 @@ def render(payload: Dict[str, Any]) -> str:
         if display_width(line) <= budget:
             return line
 
-    # Ultra-narrow fallback: always obey >=16 right margin; step down hint length to fit budget
+    # Ultra-narrow fallback: always obey >=16 right margin; clear CYAN hint (no whole-line DIM)
     fallback_budget = budget if budget >= 1 else max(0, width - 16)
     hints = [
-        f"{icon} {DIM}窗口过窄，完整四桶已用请看网页 (agy-usage){RESET}",
-        f"{icon} {DIM}窗口过窄，完整四桶请看网页 agy-usage{RESET}",
-        f"{icon} {DIM}窗口过窄，请看网页 agy-usage{RESET}",
-        f"{icon} {DIM}看网页:agy-usage{RESET}",
-        f"{icon} {DIM}看网页{RESET}",
-        f"{icon} {DIM}网页{RESET}",
+        f"{icon} {CYAN}窗口过窄，完整四桶已用请看网页 (agy-usage){RESET}",
+        f"{icon} {CYAN}窗口过窄，完整四桶请看网页 agy-usage{RESET}",
+        f"{icon} {CYAN}窗口过窄，请看网页 agy-usage{RESET}",
+        f"{icon} {CYAN}看网页:agy-usage{RESET}",
+        f"{icon} {CYAN}看网页{RESET}",
+        f"{icon} {CYAN}网页{RESET}",
         icon,
     ]
     for cand in hints:

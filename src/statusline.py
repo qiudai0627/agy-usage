@@ -197,9 +197,31 @@ def _valid_reset_dt(entry: Any) -> Optional[datetime]:
     return dt
 
 
-def _merge_freshest_quota(new_q: Dict[str, Any], prev_q: Dict[str, Any]) -> Dict[str, Any]:
-    """Prevent stale in-memory quota from idle background windows rolling back a newer reset cycle."""
+def _merge_freshest_quota(
+    new_q: Dict[str, Any],
+    prev_q: Dict[str, Any],
+    now_dt: Optional[datetime] = None,
+    same_conv: bool = False,
+) -> Dict[str, Any]:
+    """Prevent stale in-memory quota from idle background windows rolling back a newer cycle,
+    while immediately honoring both natural expiry and server-side early 100% resets."""
+    if now_dt is None:
+        now_dt = datetime.now(timezone.utc)
     merged: Dict[str, Any] = dict(prev_q)
+
+    payload_has_stale_cycle = False
+    payload_has_active_cycle = False
+    for bid, cand in new_q.items():
+        if not isinstance(cand, dict):
+            continue
+        c_dt = _valid_reset_dt(cand)
+        if c_dt is not None and c_dt > now_dt:
+            payload_has_active_cycle = True
+        old = prev_q.get(bid)
+        o_dt = _valid_reset_dt(old) if isinstance(old, dict) else None
+        if o_dt is not None and o_dt > now_dt and c_dt is not None and c_dt < o_dt - timedelta(seconds=60):
+            payload_has_stale_cycle = True
+
     for bid, cand in new_q.items():
         if not isinstance(cand, dict):
             continue
@@ -209,8 +231,43 @@ def _merge_freshest_quota(new_q: Dict[str, Any], prev_q: Dict[str, Any]) -> Dict
             continue
         cand_dt = _valid_reset_dt(cand)
         old_dt = _valid_reset_dt(old)
-        if old_dt is not None and (cand_dt is None or cand_dt < old_dt - timedelta(seconds=60)):
+        cand_rem = extract_remaining_fraction(cand)
+        old_rem = extract_remaining_fraction(old)
+
+        # 1. Previous cycle already expired in wall-clock time (or had no timer) -> always accept fresh cand
+        if old_dt is None or old_dt <= now_dt:
+            merged[bid] = cand
+            continue
+
+        # 2. Previous cycle is still in the future, but cand has sentinel 1970 reset_time:
+        #    Antigravity sends reset_time="1970-01-01T00:00:00Z" + remaining_fraction=1.0 when a pool
+        #    is freshly reset to 100% before any new token starts the rolling countdown.
+        if cand_dt is None:
+            if (
+                cand_rem is not None
+                and cand_rem >= 0.9999
+                and not payload_has_stale_cycle
+                and (same_conv or payload_has_active_cycle)
+            ):
+                merged[bid] = cand
+            else:
+                merged[bid] = old
+            continue
+
+        # 3. Both cand_dt and old_dt are valid future/active timestamps
+        if cand_dt < old_dt - timedelta(seconds=60):
             merged[bid] = old
+        elif abs((cand_dt - old_dt).total_seconds()) <= 60:
+            if (
+                not same_conv
+                and cand_rem is not None
+                and old_rem is not None
+                and cand_rem < 0.9999
+                and cand_rem > old_rem + 0.002
+            ):
+                merged[bid] = old
+            else:
+                merged[bid] = cand
         else:
             merged[bid] = cand
     return merged
@@ -219,7 +276,8 @@ def _merge_freshest_quota(new_q: Dict[str, Any], prev_q: Dict[str, Any]) -> Dict
 def persist_state(payload: Dict[str, Any]) -> None:
     try:
         ensure_data_dir()
-        now_iso = datetime.now(timezone.utc).isoformat()
+        now_dt = datetime.now(timezone.utc)
+        now_iso = now_dt.isoformat()
         state = {k: v for k, v in payload.items() if k != "email"}
         state["captured_at"] = now_iso
         state["source"] = "statusline"
@@ -234,8 +292,15 @@ def persist_state(payload: Dict[str, Any]) -> None:
                     try:
                         prev_state = json.loads(LIVE_STATE_FILE.read_text(encoding="utf-8"))
                         prev_q = prev_state.get("quota") if isinstance(prev_state, dict) else None
+                        cur_conv = str(payload.get("conversation_id") or "").strip()
+                        prev_conv = str(prev_state.get("conversation_id") or "").strip() if isinstance(prev_state, dict) else ""
                         if isinstance(prev_q, dict) and prev_q:
-                            merged_quota = _merge_freshest_quota(merged_quota, prev_q)
+                            merged_quota = _merge_freshest_quota(
+                                merged_quota,
+                                prev_q,
+                                now_dt=now_dt,
+                                same_conv=bool(cur_conv and cur_conv == prev_conv),
+                            )
                             state["quota"] = merged_quota
                             payload["quota"] = merged_quota
                     except Exception:

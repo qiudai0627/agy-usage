@@ -904,12 +904,39 @@ print("CANDIDATE_B_TZ_OK")
             self.assertNotIn("statusLine", main_part, f"Jargon leaked in {rname}")
             self.assertIn("qiudai0627/agy-usage", txt, f"Repo link missing in {rname}")
 
-        # Multi-window anti-rollback check: older reset_time from an idle window must NOT overwrite newer reset_time
+        # Multi-window anti-rollback & server-reset guarantee checks:
+        # (a) Older reset_time from an idle window must NOT overwrite newer reset_time
         old_q = {"gemini-weekly": {"remaining_fraction": 0.78, "reset_time": "2099-12-01T10:00:00Z"}}
         new_q = {"gemini-weekly": {"remaining_fraction": 0.99, "reset_time": "2099-12-03T10:00:00Z"}}
         merged = statusline._merge_freshest_quota(old_q, new_q)
         self.assertEqual(merged["gemini-weekly"]["remaining_fraction"], 0.99)
         self.assertEqual(merged["gemini-weekly"]["reset_time"], "2099-12-03T10:00:00Z")
+
+        # (b) Natural expiry (old_dt <= now_dt) must accept sentinel 1970 100% reset immediately
+        exp_prev = {"gemini-5h": {"remaining_fraction": 0.49, "reset_time": "2020-01-01T00:00:00Z"}}
+        exp_cand = {"gemini-5h": {"remaining_fraction": 1.0, "reset_time": "1970-01-01T00:00:00Z"}}
+        merged_exp = statusline._merge_freshest_quota(exp_cand, exp_prev)
+        self.assertEqual(merged_exp["gemini-5h"]["remaining_fraction"], 1.0)
+
+        # (c) Out-of-band early admin reset to 100% (sentinel 1970) on an inactive pool from an active window must win
+        prev_active = {
+            "gemini-weekly": {"remaining_fraction": 0.68, "reset_time": "2099-12-03T10:00:00Z"},
+            "3p-weekly": {"remaining_fraction": 0.24, "reset_time": "2099-12-02T10:00:00Z"},
+        }
+        cand_admin_reset = {
+            "gemini-weekly": {"remaining_fraction": 0.67, "reset_time": "2099-12-03T10:00:00Z"},
+            "3p-weekly": {"remaining_fraction": 1.0, "reset_time": "1970-01-01T00:00:00Z"},
+        }
+        merged_adm = statusline._merge_freshest_quota(cand_admin_reset, prev_active)
+        self.assertEqual(merged_adm["3p-weekly"]["remaining_fraction"], 1.0)
+
+        # (d) Stale window with older cycle on gemini-weekly must NOT overwrite 3p-weekly with untouched 1970 1.0
+        cand_stale_win = {
+            "gemini-weekly": {"remaining_fraction": 0.85, "reset_time": "2099-12-01T10:00:00Z"},
+            "3p-weekly": {"remaining_fraction": 1.0, "reset_time": "1970-01-01T00:00:00Z"},
+        }
+        merged_stale = statusline._merge_freshest_quota(cand_stale_win, prev_active)
+        self.assertEqual(merged_stale["3p-weekly"]["remaining_fraction"], 0.24)
 
 
 if __name__ == "__main__":

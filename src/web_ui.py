@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
-DASHBOARD_HTML = r"""<!DOCTYPE html>
+from i18n import LANG_OPTIONS_JS, WEB_I18N_JS
+
+_DASHBOARD_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="zh-CN" data-theme="dark">
 <head>
 <meta charset="utf-8" />
@@ -158,6 +160,9 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .btn:hover { border-color: var(--border-strong); }
   .btn.primary { background: #2563eb; border-color: transparent; color: #fff; }
   .btn.live-on { border-color: rgba(16, 185, 129, 0.4); color: var(--green); }
+  select.lang-sel {
+    appearance: auto; padding-right: 6px; max-width: 132px; outline: none; font-family: inherit;
+  }
 
   .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
   .dot.ok { background: var(--green); box-shadow: 0 0 6px rgba(16, 185, 129, 0.65); }
@@ -461,7 +466,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <div style="font-weight:650;font-size:13.5px;color:var(--text-strong)" id="dr-title">会话详情</div>
       <div style="font-size:11px;color:var(--muted)" id="dr-sub">加载中...</div>
     </div>
-    <button class="btn" data-action="close">关闭 ✕</button>
+    <button class="btn" data-action="close" data-i18n="dr_close">关闭 ✕</button>
   </div>
   <div class="drawer-body" id="dr-body"></div>
 </aside>
@@ -469,31 +474,31 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <!-- Manual Quota Calibration Modal -->
 <div class="modal" id="quota-modal">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-    <strong style="font-size:13.5px;color:var(--text-strong)">手动录入 /usage 限额快照</strong>
+    <strong style="font-size:13.5px;color:var(--text-strong)" data-i18n="mq_title">手动录入 /usage 限额快照</strong>
     <button class="btn" data-action="close">✕</button>
   </div>
-  <p style="font-size:11px;color:var(--muted);margin:0 0 10px;">将 <code>/usage</code> 页面看到的「已使用 %」填入，即可立即生成周配速与耗尽预测。</p>
+  <p style="font-size:11px;color:var(--muted);margin:0 0 10px;" data-i18n="mq_desc">填入 /usage 页面看到的「已使用 %」，即可立即生成周配速与耗尽预测。</p>
   <div class="field">
-    <label>限额池</label>
+    <label data-i18n="mq_pool">限额池</label>
     <select id="mq-bucket">
-      <option value="gemini-5h">Gemini · 当前用量 5h (gemini-5h)</option>
-      <option value="gemini-weekly">Gemini · 每周限额 7d (gemini-weekly)</option>
-      <option value="claude-5h">Claude/GPT · 当前用量 5h (3p-5h)</option>
-      <option value="claude-weekly">Claude/GPT · 每周限额 7d (3p-weekly)</option>
+      <option value="gemini-5h">Gemini · 5h (gemini-5h)</option>
+      <option value="gemini-weekly">Gemini · 7d (gemini-weekly)</option>
+      <option value="claude-5h">Claude/GPT · 5h (3p-5h)</option>
+      <option value="claude-weekly">Claude/GPT · 7d (3p-weekly)</option>
     </select>
   </div>
   <div class="field">
-    <label>已使用百分比 (0 ~ 100)</label>
-    <input id="mq-used" type="number" step="0.01" min="0" max="100" placeholder="例如 9.1 或 54.9" />
+    <label data-i18n="mq_used">已使用百分比 (0 ~ 100)</label>
+    <input id="mq-used" type="number" step="0.01" min="0" max="100" data-i18n-ph="mq_used_ph" placeholder="例如 9.1 或 54.9" />
   </div>
   <div class="field">
-    <label>重置时间 <span id="modal-tz-lbl">本地时区</span> (可选，如 12-01 18:46)</label>
+    <label><span data-i18n="mq_reset">重置时间</span> <span id="modal-tz-lbl">UTC+8</span> <span data-i18n="mq_reset_opt">(可选，如 12-01 18:46)</span></label>
     <input id="mq-reset" type="text" placeholder="12-01 18:46" />
   </div>
   <div id="mq-msg" style="font-size:11px;margin-bottom:8px;color:var(--red)"></div>
   <div style="display:flex;justify-content:flex-end;gap:6px;">
-    <button class="btn" data-action="close">取消</button>
-    <button class="btn primary" id="mq-save-btn">保存</button>
+    <button class="btn" data-action="close" data-i18n="mq_cancel">取消</button>
+    <button class="btn primary" id="mq-save-btn" data-i18n="mq_save">保存</button>
   </div>
 </div>
 
@@ -502,29 +507,30 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div class="brand">
       <div class="logo">AGY</div>
       <div>
-        <h1>Antigravity 实时用量与限额监控台</h1>
-        <div class="sub"><span class="dot ok"></span><span id="subtitle">正在同步本地遥测数据...</span></div>
+        <h1 data-i18n="h1">Antigravity 实时用量与限额监控台</h1>
+        <div class="sub"><span class="dot ok"></span><span id="subtitle" data-i18n="syncing">正在同步本地遥测数据...</span></div>
       </div>
     </div>
     <div class="controls">
       <div class="pills" id="win-pills">
-        <button class="pill" data-win="5h">5小时</button>
-        <button class="pill" data-win="today">今日</button>
-        <button class="pill" data-win="24h">24h</button>
-        <button class="pill" data-win="week">本周</button>
-        <button class="pill active" data-win="7d">近7天</button>
-        <button class="pill" data-win="all">全部</button>
+        <button class="pill" data-win="5h" data-i18n="w_5h">5小时</button>
+        <button class="pill" data-win="today" data-i18n="w_today">今日</button>
+        <button class="pill" data-win="24h" data-i18n="w_24h">24h</button>
+        <button class="pill" data-win="week" data-i18n="w_week">本周</button>
+        <button class="pill active" data-win="7d" data-i18n="w_7d">近7天</button>
+        <button class="pill" data-win="all" data-i18n="w_all">全部</button>
       </div>
-      <button class="btn live-on" id="live-btn"><span class="dot ok"></span>实时 3s</button>
-      <button class="btn" id="notify-btn" title="开启或关闭 80%/95% 额度提醒与回血桌面通知">🔔 提醒: 关</button>
-      <button class="btn" id="open-modal-btn">＋录入限额</button>
-      <button class="btn" id="export-btn">导出 CSV</button>
-      <div class="pills" id="theme-pills" title="外观">
-        <button class="pill" type="button" data-theme-pref="light">浅色</button>
-        <button class="pill" type="button" data-theme-pref="tongtou">通透</button>
-        <button class="pill" type="button" data-theme-pref="dark">深色</button>
-        <button class="pill" type="button" data-theme-pref="system">系统</button>
+      <button class="btn live-on" id="live-btn"><span class="dot ok"></span><span id="live-btn-lbl" data-i18n="live_on">实时 3s</span></button>
+      <button class="btn" id="notify-btn" data-i18n-title="ntf_tip" title="开启或关闭 80%/95% 额度提醒与回血桌面通知">🔔 提醒: 关</button>
+      <button class="btn" id="open-modal-btn" data-i18n="add_quota">＋录入限额</button>
+      <button class="btn" id="export-btn" data-i18n="export_csv">导出 CSV</button>
+      <div class="pills" id="theme-pills" data-i18n-title="th_title" title="外观主题">
+        <button class="pill" type="button" data-theme-pref="light" data-i18n="th_light">浅色</button>
+        <button class="pill" type="button" data-theme-pref="tongtou" data-i18n="th_tongtou">通透</button>
+        <button class="pill" type="button" data-theme-pref="dark" data-i18n="th_dark">深色</button>
+        <button class="pill" type="button" data-theme-pref="system" data-i18n="th_system">系统</button>
       </div>
+      <select class="btn lang-sel" id="lang-select" data-i18n-title="lang_title" title="切换界面语言 / Language"></select>
     </div>
   </header>
 
@@ -542,16 +548,16 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div class="card">
       <div class="card-head">
         <div class="pills" id="chart-tabs">
-          <button class="pill active" data-ctab="5h">近5h燃速 (10m)</button>
-          <button class="pill" data-ctab="24h">24h每小时</button>
-          <button class="pill" data-ctab="7d">7日周趋势</button>
-          <button class="pill" data-ctab="quota">限额已用曲线</button>
+          <button class="pill active" data-ctab="5h" data-i18n="ct_5h">近5h燃速 (10m)</button>
+          <button class="pill" data-ctab="24h" data-i18n="ct_24h">24h每小时</button>
+          <button class="pill" data-ctab="7d" data-i18n="ct_7d">7日周趋势</button>
+          <button class="pill" data-ctab="quota" data-i18n="ct_quota">限额已用曲线</button>
         </div>
         <div class="pills" id="metric-pills">
-          <button class="pill active" data-metric="billable_tokens">有效Token</button>
-          <button class="pill" data-metric="total_tokens">含缓存</button>
-          <button class="pill" data-metric="calls">调用数</button>
-          <button class="pill" data-metric="est_cost_usd">估算$</button>
+          <button class="pill active" data-metric="billable_tokens" data-i18n="m_billable">有效Token</button>
+          <button class="pill" data-metric="total_tokens" data-i18n="m_total">含缓存</button>
+          <button class="pill" data-metric="calls" data-i18n="m_calls">调用数</button>
+          <button class="pill" data-metric="est_cost_usd" data-i18n="m_cost">估算$</button>
         </div>
       </div>
       <div class="chart-box" id="main-chart-box"></div>
@@ -560,21 +566,21 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 
     <div class="card">
       <div class="card-head">
-        <span class="card-title">7日 × 24小时作业热力图 <span class="card-sub">(<span id="tz-lbl">UTC+8</span>)</span></span>
+        <span class="card-title"><span data-i18n="hm_title">7日 × 24小时作业热力图</span> <span class="card-sub">(<span id="tz-lbl">UTC+8</span>)</span></span>
         <div style="display:inline-flex;align-items:center;gap:4px;font-size:10px;color:var(--muted);">
-          <span>低</span>
+          <span data-i18n="hm_low">低</span>
           <span class="swatch" style="background:var(--heat-0)"></span>
           <span class="swatch" style="background:var(--heat-1)"></span>
           <span class="swatch" style="background:var(--heat-2)"></span>
           <span class="swatch" style="background:var(--heat-3)"></span>
           <span class="swatch" style="background:var(--heat-4)"></span>
-          <span>高</span>
+          <span data-i18n="hm_high">高</span>
         </div>
       </div>
       <div class="heatmap-wrap" id="heatmap-box"></div>
       <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border);">
         <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:6px;">
-          <span>模型限额池占比 (<span id="win-badge-pool">近7天</span>)</span>
+          <span><span data-i18n="pool_share_lbl">模型限额池占比</span> (<span id="win-badge-pool">近7天</span>)</span>
           <span id="pool-total-lbl"></span>
         </div>
         <div id="pool-compact-bars"></div>
@@ -587,23 +593,23 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div class="card">
       <div class="card-head">
         <div class="pills" id="detail-tabs">
-          <button class="pill active" data-dtab="convs">会话消耗排行</button>
-          <button class="pill" data-dtab="models">细分模型明细</button>
-          <button class="pill" data-dtab="tools">工作区 &amp; 高频工具</button>
+          <button class="pill active" data-dtab="convs" data-i18n="dt_convs">会话消耗排行</button>
+          <button class="pill" data-dtab="models" data-i18n="dt_models">细分模型明细</button>
+          <button class="pill" data-dtab="tools" data-i18n="dt_tools">工作区 &amp; 高频工具</button>
         </div>
-        <input class="search-input" id="conv-search" type="text" placeholder="搜索会话 / 工作区 / 模型..." />
+        <input class="search-input" id="conv-search" type="text" data-i18n-ph="search_ph" placeholder="搜索会话 / 工作区 / 模型..." />
       </div>
       <div id="detail-pane-convs" style="overflow-x:auto;">
         <table>
           <thead>
             <tr>
-              <th>会话标题 <span style="font-weight:400;color:var(--muted)">(点击看逐轮曲线)</span></th>
-              <th>工作区</th>
-              <th class="num sortable" data-sort="calls">调用 ↕</th>
-              <th class="num sortable" data-sort="billable_tokens">有效Token ↕</th>
-              <th class="num sortable" data-sort="peak_context">峰值上下文 ↕</th>
-              <th class="num sortable" data-sort="cache_hit_pct">缓存率 ↕</th>
-              <th class="num sortable" data-sort="est_cost_usd">估算$ ↕</th>
+              <th><span data-i18n="th_conv">会话标题</span> <span style="font-weight:400;color:var(--muted)" data-i18n="th_conv_hint">(点击看逐轮曲线)</span></th>
+              <th data-i18n="th_ws">工作区</th>
+              <th class="num sortable" data-sort="calls" data-i18n="th_calls_s">调用 ↕</th>
+              <th class="num sortable" data-sort="billable_tokens" data-i18n="th_bill_s">有效Token ↕</th>
+              <th class="num sortable" data-sort="peak_context" data-i18n="th_peak_s">峰值上下文 ↕</th>
+              <th class="num sortable" data-sort="cache_hit_pct" data-i18n="th_hit_s">缓存率 ↕</th>
+              <th class="num sortable" data-sort="est_cost_usd" data-i18n="th_cost_s">估算$ ↕</th>
             </tr>
           </thead>
           <tbody id="conv-tbody"></tbody>
@@ -613,14 +619,14 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <table>
           <thead>
             <tr>
-              <th>模型名称</th>
-              <th>所属限额池</th>
-              <th class="num">调用</th>
-              <th class="num">新增输入</th>
-              <th class="num">缓存命中</th>
-              <th class="num">输出</th>
-              <th class="num">缓存率</th>
-              <th class="num">估算$</th>
+              <th data-i18n="th_model">模型名称</th>
+              <th data-i18n="th_pool">所属限额池</th>
+              <th class="num" data-i18n="th_calls">调用</th>
+              <th class="num" data-i18n="th_in">新增输入</th>
+              <th class="num" data-i18n="th_cache">缓存命中</th>
+              <th class="num" data-i18n="th_out">输出</th>
+              <th class="num" data-i18n="th_hit">缓存率</th>
+              <th class="num" data-i18n="th_cost">估算$</th>
             </tr>
           </thead>
           <tbody id="model-tbody"></tbody>
@@ -629,11 +635,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <div id="detail-pane-tools" style="display:none;">
         <div class="grid grid-2" style="margin-bottom:0">
           <div>
-            <div style="font-size:11.5px;font-weight:600;margin-bottom:8px;color:var(--text-strong)">工作区消耗占比</div>
+            <div style="font-size:11.5px;font-weight:600;margin-bottom:8px;color:var(--text-strong)" data-i18n="ws_share">工作区消耗占比</div>
             <div id="project-list"></div>
           </div>
           <div>
-            <div style="font-size:11.5px;font-weight:600;margin-bottom:8px;color:var(--text-strong)">高频 Agent 工具调用</div>
+            <div style="font-size:11.5px;font-weight:600;margin-bottom:8px;color:var(--text-strong)" data-i18n="top_tools">高频 Agent 工具调用</div>
             <div id="tools-list"></div>
           </div>
         </div>
@@ -642,18 +648,18 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 
     <div class="card">
       <div class="card-head">
-        <span class="card-title">最近调用实时流水</span>
-        <span class="badge ok">最新 18 条</span>
+        <span class="card-title" data-i18n="recent_title">最近调用实时流水</span>
+        <span class="badge ok" data-i18n="recent_badge">最新 18 条</span>
       </div>
       <div style="overflow-x:auto;max-height:340px;overflow-y:auto;">
         <table>
           <thead>
             <tr>
-              <th>时间</th>
-              <th>模型 / 会话</th>
-              <th class="num">新增</th>
-              <th class="num">缓存</th>
-              <th class="num">输出</th>
+              <th data-i18n="th_time">时间</th>
+              <th data-i18n="th_model_conv">模型 / 会话</th>
+              <th class="num" data-i18n="th_in_short">新增</th>
+              <th class="num" data-i18n="th_cache_short">缓存</th>
+              <th class="num" data-i18n="th_out">输出</th>
             </tr>
           </thead>
           <tbody id="recent-tbody"></tbody>
@@ -662,14 +668,107 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     </div>
   </div>
 
-  <div class="footnote">
-    纯本地隐私架构 · 数据源：本地 transcript.jsonl + 官方 statusLine 实时配额 JSON · 费用与缓存节省按公开单价估算，非官方账单。
+  <div class="footnote" data-i18n="footnote">
+    纯本地隐私架构 · 数据仅保存在本机 · 费用与缓存节省按公开单价估算，非官方账单。
   </div>
 </div>
 
 <script>
-const WIN_NAMES = { '5h': '近5小时', 'today': '今日', '24h': '近24小时', 'week': '本周', '7d': '近7天', 'all': '全部' };
+const LANG_OPTIONS = __LANG_OPTIONS_JSON__;
+const I18N = __WEB_I18N_JSON__;
 const POOL_COLORS = { gemini_pro: '#38bdf8', claude_gpt: '#a78bfa', gemini_flash: '#10b981', other: '#64748b' };
+
+const LANG_KEY = 'agy-usage-lang';
+function detectBrowserLang() {
+  const list = (navigator.languages && navigator.languages.length) ? navigator.languages : [navigator.language || 'en'];
+  for (const raw of list) {
+    const lc = String(raw || '').toLowerCase();
+    if (!lc) continue;
+    if (lc === 'zh-tw' || lc === 'zh-hk' || lc === 'zh-mo' || lc.includes('hant')) return 'zh-TW';
+    if (lc.startsWith('zh')) return 'zh-CN';
+    if (lc.startsWith('ja')) return 'ja';
+    if (lc.startsWith('ko')) return 'ko';
+    if (lc.startsWith('es')) return 'es';
+    if (lc.startsWith('pt')) return 'pt-BR';
+    if (lc.startsWith('de')) return 'de';
+    if (lc.startsWith('fr')) return 'fr';
+    if (lc.startsWith('ru')) return 'ru';
+    if (lc.startsWith('vi')) return 'vi';
+    if (lc.startsWith('en')) return 'en';
+  }
+  return 'en';
+}
+let currentLang = localStorage.getItem(LANG_KEY) || detectBrowserLang();
+if (!I18N[currentLang]) currentLang = 'en';
+
+function tr(key, ...args) {
+  const dict = I18N[currentLang] || I18N['en'];
+  let tpl = dict[key] !== undefined ? dict[key] : (I18N['en'][key] || key);
+  if (typeof tpl !== 'string') return tpl;
+  args.forEach((v, idx) => {
+    tpl = tpl.split('{' + idx + '}').join(v == null ? '' : String(v));
+  });
+  return tpl;
+}
+function winName(w) {
+  const map = { '5h': 'w_5h', 'today': 'w_today', '24h': 'w_24h', 'week': 'w_week', '7d': 'w_7d', 'all': 'w_all' };
+  return tr(map[w] || 'w_7d');
+}
+function poolLabel(poolKey) {
+  if (poolKey === 'gemini_pro') return tr('leg_gem_pro');
+  if (poolKey === 'claude_gpt') return tr('leg_cld');
+  if (poolKey === 'gemini_flash') return tr('leg_flash');
+  return tr('leg_other');
+}
+function bucketDisplayLabel(b) {
+  const grp = b.pool_key === 'claude_gpt' ? 'Claude/GPT' : (b.pool_key === 'gemini_flash' ? 'Gemini Flash' : 'Gemini');
+  const win = b.window_kind === 'five_hour' ? '5h' : (b.window_kind === 'weekly' ? '7d' : '');
+  return win ? `${grp} · ${win}` : grp;
+}
+function fmtDayLabel(dateStr, fallback) {
+  if (!dateStr || dateStr.length < 10) return fallback || '';
+  const parts = dateStr.split('-');
+  if (parts.length !== 3) return fallback || dateStr;
+  const dt = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+  const wds = tr('weekdays');
+  const wd = Array.isArray(wds) ? (wds[dt.getDay()] || '') : '';
+  return `${parts[1]}-${parts[2]} ${wd}`.trim();
+}
+function fmtWs(ws) {
+  return (!ws || ws === '(无工作区)') ? tr('no_ws') : ws;
+}
+function fmtTitle(t) {
+  return (!t || t === '(未命名会话)' || t === '(未命名)') ? tr('unnamed') : t;
+}
+
+(function initLangSelect() {
+  const sel = document.getElementById('lang-select');
+  LANG_OPTIONS.forEach(([code, label]) => {
+    const opt = document.createElement('option');
+    opt.value = code;
+    opt.textContent = '🌐 ' + label;
+    if (code === currentLang) opt.selected = true;
+    sel.appendChild(opt);
+  });
+})();
+
+function applyStaticI18n() {
+  document.documentElement.setAttribute('lang', currentLang);
+  document.title = tr('doc_title');
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const k = el.getAttribute('data-i18n');
+    if (k === 'syncing' && lastData) return;
+    el.textContent = tr(k);
+  });
+  document.querySelectorAll('[data-i18n-ph]').forEach(el => {
+    el.setAttribute('placeholder', tr(el.getAttribute('data-i18n-ph')));
+  });
+  document.querySelectorAll('[data-i18n-title]').forEach(el => {
+    el.setAttribute('title', tr(el.getAttribute('data-i18n-title')));
+  });
+  const liveLbl = document.getElementById('live-btn-lbl');
+  if (liveLbl) liveLbl.textContent = liveEnabled ? tr('live_on') : tr('live_off');
+}
 
 let currentWin = '7d';
 let currentChartTab = '5h';
@@ -736,9 +835,9 @@ function fmtCountdown(sec) {
   const h = Math.floor((sec % 86400) / 3600);
   const m = Math.floor((sec % 3600) / 60);
   const s = sec % 60;
-  if (d > 0) return `${d}天${h}小时${m}分`;
-  if (h > 0) return `${h}小时${m}分${s}秒`;
-  return `${m}分${s}秒`;
+  if (d > 0) return tr('cd_dhm', d, h, m);
+  if (h > 0) return tr('cd_hms', h, m, s);
+  return tr('cd_ms', m, s);
 }
 
 // Safe delegated tooltip & click handling (100% textContent DOM nodes, zero innerHTML XSS surface)
@@ -787,7 +886,7 @@ document.addEventListener('click', evt => {
     const txt = copyEl.getAttribute('data-copy') || '';
     navigator.clipboard && navigator.clipboard.writeText(txt);
     const old = copyEl.textContent;
-    copyEl.textContent = '已复制 ✓';
+    copyEl.textContent = tr('copied');
     setTimeout(() => { copyEl.textContent = old; }, 1100);
     return;
   }
@@ -807,7 +906,7 @@ setInterval(() => {
     const ts = Number(el.getAttribute('data-reset-ts'));
     if (!ts) return;
     const remSec = (ts - Date.now()) / 1000;
-    el.textContent = remSec > 0 ? '剩 ' + fmtCountdown(remSec) : '已到期 · 待刷新';
+    el.textContent = remSec > 0 ? tr('rem_time', fmtCountdown(remSec)) : tr('expired_wait');
   });
 }, 1000);
 
@@ -815,35 +914,86 @@ function renderBanner(data) {
   const ls = data.live_session || {};
   const q = data.quota || {};
   const ctx = ls.context_window;
-  let ctxHtml = '<span class="v" style="color:var(--muted)">待推送</span>';
+  let ctxHtml = `<span class="v" style="color:var(--muted)">${esc(tr('st_pending'))}</span>`;
   if (ctx && ctx.used_percentage != null) {
     const u = Number(ctx.used_percentage);
     const col = u >= 80 ? 'var(--red)' : (u >= 55 ? 'var(--yellow)' : 'var(--cyan)');
     ctxHtml = `<span class="v" style="color:${col}">${u.toFixed(1)}%</span> <span style="color:var(--muted)">(${fmtTok((ctx.total_input_tokens||0)+(ctx.total_output_tokens||0))}/${fmtTok(ctx.context_window_size||0)})</span>`;
   }
   const slBadge = ls.connected
-    ? `<span class="dot ok"></span>已连接 <span style="color:var(--muted);font-weight:400">(${esc(ls.captured_at_cst)})</span>`
+    ? `<span class="dot ok"></span>${esc(tr('st_connected'))} <span style="color:var(--muted);font-weight:400">(${esc(ls.captured_at_cst)})</span>`
     : (ls.statusline_configured
-        ? `<span class="dot warn"></span>待触发推送`
-        : `<span class="dot err"></span>未接入`);
+        ? `<span class="dot warn"></span>${esc(tr('st_wait_push'))}`
+        : `<span class="dot err"></span>${esc(tr('st_not_linked'))}`);
   const slCmd = '/statusline ' + (ls.statusline_path || 'statusline.py');
 
   document.getElementById('live-banner').innerHTML = `
     <div class="strip-left">
-      <div class="kv"><span class="k">实时通道</span><span class="v">${slBadge}</span></div>
-      <div class="kv"><span class="k">主模型</span><span class="v" style="color:var(--cyan)">${esc(ls.active_model)}</span></div>
+      <div class="kv"><span class="k">${esc(tr('st_channel'))}</span><span class="v">${slBadge}</span></div>
+      <div class="kv"><span class="k">${esc(tr('st_model'))}</span><span class="v" style="color:var(--cyan)">${esc(ls.active_model)}</span></div>
       <div class="kv"><span class="k">Planner</span><span class="v" style="color:var(--purple)">${esc(ls.configured_planner)}</span></div>
-      <div class="kv"><span class="k">当前上下文</span>${ctxHtml}</div>
+      <div class="kv"><span class="k">${esc(tr('st_ctx'))}</span>${ctxHtml}</div>
       ${ls.plan_tier && ls.plan_tier !== '-' ? `<div class="kv"><span class="badge">${esc(ls.plan_tier)}</span></div>` : ''}
-      ${q.has_live_quota ? `<div class="kv"><span class="k">采样</span><span class="v">${q.snapshot_count}条</span></div>` : ''}
+      ${q.has_live_quota ? `<div class="kv"><span class="k">${esc(tr('st_samples'))}</span><span class="v">${esc(tr('st_samples_val', q.snapshot_count))}</span></div>` : ''}
     </div>
-    <span class="code-chip" title="点击复制" data-copy="${esc(slCmd)}">${esc(slCmd)}</span>
+    <span class="code-chip" title="${esc(tr('click_copy'))}" data-copy="${esc(slCmd)}">${esc(slCmd)}</span>
   `;
 }
 
 function renderInsights(data) {
-  const list = data.insights || [];
-  document.getElementById('insights-strip').innerHTML = list.map(i => `
+  const q = data.quota || {};
+  const sel = data.selected_summary || {};
+  const byPool = data.by_pool || [];
+  const b5 = data.burn_5h || {};
+  const chips = [];
+
+  (q.buckets || []).forEach(b => {
+    const bName = bucketDisplayLabel(b);
+    const remTxt = b.reset_in_seconds != null ? fmtCountdown(b.reset_in_seconds) : (b.reset_in_text || '-');
+    if (b.status === 'critical' && b.used_pct != null) {
+      chips.push({
+        level: 'crit',
+        title: tr('ins_crit_t', bName, b.used_pct.toFixed(1)),
+        detail: tr('ins_crit_d', (b.remaining_pct || 0).toFixed(1), remTxt),
+      });
+    } else if (b.status === 'warning' && b.used_pct != null) {
+      const pBit = b.pacing_ratio ? tr('ins_pace_bit', b.pacing_ratio) : '';
+      chips.push({
+        level: 'warn',
+        title: tr('ins_warn_t', bName, b.used_pct.toFixed(1), pBit),
+        detail: tr('ins_warn_d', (b.remaining_pct || 0).toFixed(1), (b.projected_rem_at_reset || 0).toFixed(1)),
+      });
+    }
+  });
+
+  if ((sel.cache_read_tokens || 0) > 0) {
+    const hit = sel.cache_hit_pct || 0;
+    const lvl = hit >= 85 ? 'ok' : (hit < 65 ? 'warn' : 'info');
+    chips.push({
+      level: lvl,
+      title: tr('ins_cache_t', hit, fmtUsd(sel.cache_saved_usd)),
+      detail: tr('ins_cache_d', fmtTok(sel.cache_read_tokens), sel.cache_saved_pct || 0),
+    });
+  }
+
+  const cldPool = byPool.find(p => p.pool === 'claude_gpt');
+  if (cldPool && cldPool.share_billable_pct >= 30) {
+    chips.push({
+      level: 'info',
+      title: tr('ins_3p_t', cldPool.share_billable_pct),
+      detail: tr('ins_3p_d', cldPool.calls, fmtUsd(cldPool.est_cost_usd)),
+    });
+  }
+
+  if ((b5.calls_per_hour || 0) >= 40) {
+    chips.push({
+      level: 'info',
+      title: tr('ins_burst_t', b5.calls_per_hour),
+      detail: tr('ins_burst_d', fmtTok(b5.billable_tokens_per_hour)),
+    });
+  }
+
+  document.getElementById('insights-strip').innerHTML = chips.slice(0, 4).map(i => `
     <div class="ichip ${esc(i.level)}"><b>${esc(i.title)}</b><span>${esc(i.detail)}</span></div>
   `).join('');
 }
@@ -858,14 +1008,14 @@ function renderQuota(data) {
     el.innerHTML = `
       <div class="card onboarding" style="margin-bottom:12px;">
         <div class="card-head" style="margin-bottom:6px;">
-          <span class="card-title">接入官方每周限额 &amp; 5小时限额实时遥测</span>
-          <span class="badge warn">${ls.statusline_configured ? '等待首次触发' : '差一步激活'}</span>
+          <span class="card-title">${esc(tr('onb_title'))}</span>
+          <span class="badge warn">${esc(ls.statusline_configured ? tr('onb_wait') : tr('onb_step'))}</span>
         </div>
         <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;">
-          <span style="color:var(--muted);font-size:11.5px;">在已打开的 <code>agy</code> 窗口运行右侧命令（或新开一个会话），即可实时显示 Gemini 与 Claude/GPT 四桶精确剩余 % 与重置倒计时。</span>
+          <span style="color:var(--muted);font-size:11.5px;">${esc(tr('onb_desc'))}</span>
           <div style="display:flex;gap:6px;align-items:center;">
             <span class="code-chip" data-copy="${esc(slCmd)}">${esc(slCmd)}</span>
-            <button class="btn primary" data-copy="${esc(slCmd)}">复制命令</button>
+            <button class="btn primary" data-copy="${esc(slCmd)}">${esc(tr('copy_cmd'))}</button>
           </div>
         </div>
       </div>
@@ -882,26 +1032,29 @@ function renderQuota(data) {
     const usedDisp = (used > 0 && used < 10) ? used.toFixed(2) : used.toFixed(1);
     const remDisp = (used > 0 && used < 10) ? rem.toFixed(2) : rem.toFixed(1);
 
-    let badge = '<span class="badge ok">健康</span>';
-    if (b.status === 'reset_ready') badge = '<span class="badge">待刷新</span>';
-    else if (b.status === 'critical') badge = '<span class="badge crit">告急</span>';
-    else if (b.status === 'warning') badge = '<span class="badge warn">偏快</span>';
+    let badge = `<span class="badge ok">${esc(tr('b_ok'))}</span>`;
+    if (b.status === 'reset_ready') badge = `<span class="badge">${esc(tr('b_ready'))}</span>`;
+    else if (b.status === 'critical') badge = `<span class="badge crit">${esc(tr('b_crit'))}</span>`;
+    else if (b.status === 'warning') badge = `<span class="badge warn">${esc(tr('b_warn'))}</span>`;
 
     const resetEpoch = (!b.reset_passed && b.reset_time) ? new Date(b.reset_time).getTime() : 0;
-    const winName = b.window_kind === 'five_hour' ? '当前用量 (5h 窗口)' : (b.window_kind === 'weekly' ? '每周限额 (7d 周期)' : b.label);
+    const winTitle = b.window_kind === 'five_hour' ? tr('win_5h') : (b.window_kind === 'weekly' ? tr('win_7d') : tr('win_other'));
+    const remCountdown = b.reset_in_seconds != null ? fmtCountdown(b.reset_in_seconds) : (b.reset_in_text || '-');
 
     const budgetBit = b.reset_passed
-      ? '下次调用刷新'
+      ? esc(tr('next_call_refresh'))
       : (b.window_kind === 'weekly' && b.daily_safe_budget_pct != null
-          ? `日均可用 <strong>${b.daily_safe_budget_pct}%</strong>`
-          : (b.hourly_safe_budget_pct != null ? `每小时可用 <strong>${b.hourly_safe_budget_pct}%</strong>` : ''));
+          ? tr('daily_avail', b.daily_safe_budget_pct)
+          : (b.hourly_safe_budget_pct != null ? tr('hourly_avail', b.hourly_safe_budget_pct) : ''));
+    const exhTxt = b.projected_exhaust_hours != null ? fmtCountdown(b.projected_exhaust_hours * 3600) : '-';
     const forecastBit = (!b.reset_passed && b.projected_rem_at_reset != null)
       ? (b.projected_rem_at_reset <= 0.1
-          ? `<span style="color:var(--red)">预计 ${esc(b.projected_exhaust_text)} 耗尽</span>`
-          : `重置前预计剩 <strong style="color:var(--green)">${b.projected_rem_at_reset.toFixed(1)}%</strong>`)
+          ? `<span style="color:var(--red)">${esc(tr('est_exhaust', exhTxt))}</span>`
+          : tr('est_rem_reset', b.projected_rem_at_reset.toFixed(1)))
       : '';
-    const ratioBit = (!b.reset_passed && b.pacing_ratio != null) ? `配速 <strong>${b.pacing_ratio}x</strong>` : '';
+    const ratioBit = (!b.reset_passed && b.pacing_ratio != null) ? tr('pace_val', b.pacing_ratio) : '';
     const tokBit = b.tokens_per_1pct ? `1%≈<strong>${fmtTok(b.tokens_per_1pct)}</strong>` : '';
+    const bDisp = bucketDisplayLabel(b);
 
     return `
       <div class="bucket-item">
@@ -914,20 +1067,20 @@ function renderQuota(data) {
           </svg>
           <div class="mini-ring-txt">
             <span class="mini-ring-pct" style="color:${col}">${usedDisp}%</span>
-            <span class="mini-ring-lbl">已用</span>
+            <span class="mini-ring-lbl">${esc(tr('used_lbl'))}</span>
           </div>
         </div>
         <div style="min-width:0">
           <div class="b-top">
-            <div><span class="b-name">${esc(winName)}</span> <span style="color:var(--muted)">剩 ${remDisp}%</span> ${badge}</div>
-            <span style="color:var(--cyan);font-weight:600;font-size:11px" ${resetEpoch ? `data-reset-ts="${resetEpoch}"` : ''}>${b.reset_passed ? '已到期 · 待刷新' : '剩 ' + esc(b.reset_in_text)}</span>
+            <div><span class="b-name">${esc(winTitle)}</span> <span style="color:var(--muted)">${esc(tr('rem_val', remDisp))}</span> ${badge}</div>
+            <span style="color:var(--cyan);font-weight:600;font-size:11px" ${resetEpoch ? `data-reset-ts="${resetEpoch}"` : ''}>${b.reset_passed ? esc(tr('expired_wait')) : esc(tr('rem_time', remCountdown))}</span>
           </div>
-          <div class="dual-bar" data-tip-title="${esc(b.label)}" data-tip="${esc(`已用额度: ${usedDisp}% · 周期时间已过: ${(b.time_elapsed_pct||0).toFixed(1)}%\n重置时间: ${b.reset_time_cst} (${data.timezone_label || 'UTC+8'})`)}">
+          <div class="dual-bar" data-tip-title="${esc(bDisp)}" data-tip="${esc(tr('dual_tip', usedDisp, (b.time_elapsed_pct||0).toFixed(1), b.reset_time_cst, data.timezone_label || 'UTC+8'))}">
             <div class="dual-fill" style="width:${used}%;background:${col}"></div>
             ${b.time_elapsed_pct != null ? `<div class="time-marker" style="left:${Math.min(99, b.time_elapsed_pct)}%"></div>` : ''}
           </div>
           <div class="b-meta">
-            <span>重置 ${esc(b.reset_time_cst)}</span>
+            <span>${esc(tr('reset_at', b.reset_time_cst))}</span>
             <span>${[ratioBit, budgetBit, forecastBit, tokBit].filter(Boolean).join(' · ')}</span>
           </div>
         </div>
@@ -936,9 +1089,9 @@ function renderQuota(data) {
   }
 
   const pools = [
-    { key: 'gemini', cls: 'pool-gemini', dot: '#38bdf8', title: 'Google Gemini 模型池', sub: 'Gemini 4 Neon / Carbon / Flash', items: q.buckets.filter(b => (b.pool_key || '').startsWith('gemini')) },
-    { key: 'claude', cls: 'pool-claude', dot: '#a78bfa', title: 'Claude / GPT 第三方模型池 (3P)', sub: 'Claude Opus / Sonnet 5.5 · GPT', items: q.buckets.filter(b => b.pool_key === 'claude_gpt') },
-    { key: 'other', cls: '', dot: '#64748b', title: '其他限额池', sub: '', items: q.buckets.filter(b => !(b.pool_key || '').startsWith('gemini') && b.pool_key !== 'claude_gpt') },
+    { key: 'gemini', cls: 'pool-gemini', dot: '#38bdf8', title: tr('pool_gem_t'), sub: tr('pool_gem_s'), items: q.buckets.filter(b => (b.pool_key || '').startsWith('gemini')) },
+    { key: 'claude', cls: 'pool-claude', dot: '#a78bfa', title: tr('pool_cld_t'), sub: tr('pool_cld_s'), items: q.buckets.filter(b => b.pool_key === 'claude_gpt') },
+    { key: 'other', cls: '', dot: '#64748b', title: tr('pool_oth_t'), sub: '', items: q.buckets.filter(b => !(b.pool_key || '').startsWith('gemini') && b.pool_key !== 'claude_gpt') },
   ].filter(g => g.items.length > 0);
 
   el.innerHTML = `<div class="grid ${pools.length >= 2 ? 'grid-2' : ''}">` + pools.map(g => `
@@ -958,40 +1111,42 @@ function renderKPIs(data) {
   const wsel = data.selected_summary || w7;
   const b5 = data.burn_5h || {};
   const wow = data.week_over_week || {};
-  let wowBadge = '<span class="badge muted" data-tip-title="自然周同进度环比" data-tip="上周同期缺少本地样本，暂不可比">较上周: 暂不可比</span>';
+  let wowBadge = `<span class="badge muted" style="cursor:help" data-tip-title="${esc(tr('wow_title'))}" data-tip="${esc(tr('wow_na_tip'))}">${esc(tr('wow_na'))}</span>`;
   if (wow.comparable && wow.delta_pct != null) {
     const cls = wow.delta_pct <= 0 ? 'ok' : (wow.delta_pct >= 35 ? 'warn' : 'purple');
+    const sign = wow.delta_pct > 0 ? '+' : '';
     const prevTok = fmtTok((wow.previous || {}).billable_tokens || 0);
     const curTok = fmtTok((wow.current || {}).billable_tokens || 0);
-    const tipTxt = `本周已过 ${wow.elapsed_hours || 0}h: ${curTok}\n上周同期 ${wow.elapsed_hours || 0}h: ${prevTok}\n注: 按本地自然周同进度统计，独立于滚动配额周期`;
-    wowBadge = `<span class="badge ${cls}" style="cursor:help" data-tip-title="本周 vs 上周同进度环比" data-tip="${esc(tipTxt)}">${esc(wow.badge_text)}</span>`;
-  } else if (wow.badge_text) {
-    wowBadge = `<span class="badge muted" style="cursor:help" data-tip-title="自然周同进度环比" data-tip="${esc(wow.reason || '')}">${esc(wow.badge_text)}</span>`;
+    const tipTxt = tr('wow_tip', wow.elapsed_hours || 0, curTok, prevTok);
+    const bTxt = tr('wow_badge', sign + wow.delta_pct.toFixed(1));
+    wowBadge = `<span class="badge ${cls}" style="cursor:help" data-tip-title="${esc(tr('wow_title'))}" data-tip="${esc(tipTxt)}">${esc(bTxt)}</span>`;
+  } else if ((wow.elapsed_hours || 0) > 0 && (wow.elapsed_hours || 0) < 2.0) {
+    wowBadge = `<span class="badge muted" style="cursor:help" data-tip-title="${esc(tr('wow_title'))}" data-tip="${esc(tr('wow_wait_tip'))}">${esc(tr('wow_wait'))}</span>`;
   }
   document.getElementById('kpi-cards').innerHTML = `
     <div class="card kpi-card">
-      <div style="display:flex;justify-content:space-between;align-items:center;"><span class="card-sub">近 5 小时有效消耗</span><span class="badge">燃速 ${fmtTok(b5.billable_tokens_per_hour||0)}/h</span></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;"><span class="card-sub">${esc(tr('kpi_5h_t'))}</span><span class="badge">${esc(tr('kpi_burn', fmtTok(b5.billable_tokens_per_hour||0)))}</span></div>
       <div class="kpi-val" style="color:var(--cyan)">${fmtTok(w5.billable_tokens)}</div>
-      <div class="kpi-sub">输入 ${fmtTok(w5.input_tokens)} · 输出 ${fmtTok(w5.output_tokens)}</div>
-      <div class="kpi-foot"><span>${w5.calls || 0} 次调用 (${b5.calls_per_hour||0}/h)</span><span>估算 ${fmtUsd(w5.est_cost_usd)}</span></div>
+      <div class="kpi-sub">${esc(tr('kpi_io', fmtTok(w5.input_tokens), fmtTok(w5.output_tokens)))}</div>
+      <div class="kpi-foot"><span>${esc(tr('kpi_calls_rate', w5.calls || 0, b5.calls_per_hour || 0))}</span><span>${esc(tr('kpi_est', fmtUsd(w5.est_cost_usd)))}</span></div>
     </div>
     <div class="card kpi-card">
-      <div style="display:flex;justify-content:space-between;align-items:center;"><span class="card-sub">今日累计有效消耗</span><span class="badge ok">Today</span></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;"><span class="card-sub">${esc(tr('kpi_today_t'))}</span><span class="badge ok">${esc(tr('w_today'))}</span></div>
       <div class="kpi-val">${fmtTok(wt.billable_tokens)}</div>
-      <div class="kpi-sub">输入 ${fmtTok(wt.input_tokens)} · 输出 ${fmtTok(wt.output_tokens)}</div>
-      <div class="kpi-foot"><span>${wt.calls || 0} 次调用 · ${wt.tool_calls || 0} 工具</span><span>估算 ${fmtUsd(wt.est_cost_usd)}</span></div>
+      <div class="kpi-sub">${esc(tr('kpi_io', fmtTok(wt.input_tokens), fmtTok(wt.output_tokens)))}</div>
+      <div class="kpi-foot"><span>${esc(tr('kpi_calls_tools', wt.calls || 0, wt.tool_calls || 0))}</span><span>${esc(tr('kpi_est', fmtUsd(wt.est_cost_usd)))}</span></div>
     </div>
     <div class="card kpi-card">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:4px;"><span class="card-sub">近 7 天周累计</span>${wowBadge}</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:4px;"><span class="card-sub">${esc(tr('kpi_7d_t'))}</span>${wowBadge}</div>
       <div class="kpi-val" style="color:var(--purple)">${fmtTok(w7.billable_tokens)}</div>
-      <div class="kpi-sub">含缓存总吞吐 ${fmtTok(w7.total_tokens)}</div>
-      <div class="kpi-foot"><span>${w7.calls || 0} 次调用 · ${w7.conversations || 0} 会话</span><span>估算 ${fmtUsd(w7.est_cost_usd)}</span></div>
+      <div class="kpi-sub">${esc(tr('kpi_total_thru', fmtTok(w7.total_tokens)))}</div>
+      <div class="kpi-foot"><span>${esc(tr('kpi_calls_convs', w7.calls || 0, w7.conversations || 0))}</span><span>${esc(tr('kpi_est', fmtUsd(w7.est_cost_usd)))}</span></div>
     </div>
     <div class="card kpi-card">
-      <div style="display:flex;justify-content:space-between;align-items:center;"><span class="card-sub">缓存节省 (${esc(WIN_NAMES[currentWin]||currentWin)})</span><span class="badge ok">命中 ${wsel.cache_hit_pct||0}%</span></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;"><span class="card-sub">${esc(tr('kpi_cache_t', winName(currentWin)))}</span><span class="badge ok">${esc(tr('kpi_hit', wsel.cache_hit_pct||0))}</span></div>
       <div class="kpi-val" style="color:var(--green)">${fmtUsd(wsel.cache_saved_usd)}</div>
-      <div class="kpi-sub">命中 ${fmtTok(wsel.cache_read_tokens)} tok (省 ${wsel.cache_saved_pct||0}%)</div>
-      <div class="kpi-foot"><span>实际估算 ${fmtUsd(wsel.est_cost_usd)}</span><span>无缓存 ${fmtUsd((wsel.est_cost_usd||0)+(wsel.cache_saved_usd||0))}</span></div>
+      <div class="kpi-sub">${esc(tr('kpi_hit_sub', fmtTok(wsel.cache_read_tokens), wsel.cache_saved_pct||0))}</div>
+      <div class="kpi-foot"><span>${esc(tr('kpi_actual_est', fmtUsd(wsel.est_cost_usd)))}</span><span>${esc(tr('kpi_uncached', fmtUsd((wsel.est_cost_usd||0)+(wsel.cache_saved_usd||0))))}</span></div>
     </div>
   `;
 }
@@ -1006,7 +1161,7 @@ function renderMainChart(data) {
     const q = data.quota || {};
     const withHist = (q.buckets || []).filter(b => (b.history || []).length >= 2);
     if (!withHist.length) {
-      box.innerHTML = `<div style="height:210px;display:grid;place-items:center;color:var(--muted);">采样点积累中（随会话进行自动生成变化曲线）</div>`;
+      box.innerHTML = `<div style="height:210px;display:grid;place-items:center;color:var(--muted);">${esc(tr('quota_empty'))}</div>`;
       legEl.innerHTML = '';
       return;
     }
@@ -1026,7 +1181,7 @@ function renderMainChart(data) {
     let paths = '', leg = '';
     withHist.forEach((b, idx) => {
       const c = colors[idx % colors.length];
-      // Deduplicate consecutive identical remaining_pct values (keep endpoints & changes)
+      const bDisp = bucketDisplayLabel(b);
       const raw = b.history;
       const slim = raw.filter((pt, i) => i === 0 || i === raw.length - 1 || pt.used_pct !== raw[i - 1].used_pct);
       const coords = slim.map(p => ({
@@ -1036,11 +1191,11 @@ function renderMainChart(data) {
       }));
       paths += `<polyline fill="none" stroke="${c}" stroke-width="2" points="${coords.map(o => `${o.x.toFixed(1)},${o.y.toFixed(1)}`).join(' ')}" />`;
       coords.forEach(o => {
-        const tipTitle = `${b.label} · ${o.p.ts_cst}`;
-        const tipTxt = `已使用: ${o.p.used_pct}% · 剩余: ${o.p.remaining_pct}%`;
+        const tipTitle = `${bDisp} · ${o.p.ts_cst}`;
+        const tipTxt = tr('q_tip', o.p.used_pct, o.p.remaining_pct);
         paths += `<circle cx="${o.x.toFixed(1)}" cy="${o.y.toFixed(1)}" r="3" fill="${c}" style="cursor:pointer" data-tip-title="${esc(tipTitle)}" data-tip="${esc(tipTxt)}" />`;
       });
-      leg += `<span class="legend-item"><span class="swatch" style="background:${c}"></span>${esc(b.label)}</span>`;
+      leg += `<span class="legend-item"><span class="swatch" style="background:${c}"></span>${esc(bDisp)}</span>`;
     });
     box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:210px;display:block">${grid}${paths}</svg>`;
     legEl.innerHTML = leg;
@@ -1076,11 +1231,18 @@ function renderMainChart(data) {
   items.forEach((d, idx) => {
     const x = padL + idx * step + (step - barW) / 2;
     const totalV = Number(d[currentMetric] || 0);
-    const tipTxt =
-      `有效Token: ${fmtTok(d.billable_tokens)} (输入 ${fmtTok(d.input_tokens)} / 输出 ${fmtTok(d.output_tokens)})\n` +
-      `缓存命中: ${fmtTok(d.cache_read_tokens)} · 调用: ${d.calls}次 · 估算 ${fmtUsd(d.est_cost_usd)}`;
+    const dispLbl = currentChartTab === '7d' ? fmtDayLabel(d.date, d.label) : d.label;
+    const tipTxt = tr(
+      'bar_tip',
+      fmtTok(d.billable_tokens),
+      fmtTok(d.input_tokens),
+      fmtTok(d.output_tokens),
+      fmtTok(d.cache_read_tokens),
+      tr('n_calls', d.calls),
+      fmtUsd(d.est_cost_usd)
+    );
 
-    svg += `<g style="cursor:pointer" data-tip-title="${esc(d.label)}" data-tip="${esc(tipTxt)}">`;
+    svg += `<g style="cursor:pointer" data-tip-title="${esc(dispLbl)}" data-tip="${esc(tipTxt)}">`;
     svg += `<rect x="${(padL + idx * step).toFixed(1)}" y="${padT}" width="${step.toFixed(1)}" height="${plotH}" fill="transparent" />`;
 
     if (currentMetric === 'billable_tokens') {
@@ -1102,16 +1264,16 @@ function renderMainChart(data) {
     const showLbl = currentChartTab === '7d' ? true : (idx % 4 === 0 || idx === items.length - 1);
     if (showLbl) {
       const lx = padL + idx * step + step / 2;
-      svg += `<text x="${lx.toFixed(1)}" y="${H - 7}" text-anchor="middle" fill="var(--muted)" font-size="9.5">${esc(d.label)}</text>`;
+      svg += `<text x="${lx.toFixed(1)}" y="${H - 7}" text-anchor="middle" fill="var(--muted)" font-size="9.5">${esc(dispLbl)}</text>`;
     }
   });
 
   box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:210px;display:block">${svg}</svg>`;
   legEl.innerHTML = currentMetric === 'billable_tokens'
-    ? `<span class="legend-item"><span class="swatch" style="background:#38bdf8"></span>Gemini Pro / 旗舰</span>
-       <span class="legend-item"><span class="swatch" style="background:#a78bfa"></span>Claude / GPT (3P)</span>
-       <span class="legend-item"><span class="swatch" style="background:#10b981"></span>Gemini Flash</span>`
-    : `<span class="legend-item">当前指标：${esc(document.querySelector('#metric-pills .pill.active')?.textContent || '')}（悬停柱体查看完整明细）</span>`;
+    ? `<span class="legend-item"><span class="swatch" style="background:#38bdf8"></span>${esc(tr('leg_gem_pro'))}</span>
+       <span class="legend-item"><span class="swatch" style="background:#a78bfa"></span>${esc(tr('leg_cld'))}</span>
+       <span class="legend-item"><span class="swatch" style="background:#10b981"></span>${esc(tr('leg_flash'))}</span>`
+    : `<span class="legend-item">${esc(tr('leg_cur', document.querySelector('#metric-pills .pill.active')?.textContent || ''))}</span>`;
 }
 
 function renderHeatmapAndPools(data) {
@@ -1124,7 +1286,8 @@ function renderHeatmapAndPools(data) {
   html += '</tr></thead><tbody>';
 
   rows.forEach(r => {
-    html += `<tr><td class="day-lbl">${esc(r.label)}</td>`;
+    const dLbl = fmtDayLabel(r.date, r.label);
+    html += `<tr><td class="day-lbl">${esc(dLbl)}</td>`;
     r.hours.forEach(c => {
       const ratio = c.billable_tokens / maxVal;
       let bg = 'var(--heat-0)';
@@ -1134,8 +1297,8 @@ function renderHeatmapAndPools(data) {
         else if (ratio >= 0.16) bg = 'var(--heat-2)';
         else bg = 'var(--heat-1)';
       }
-      const tipTitle = `${r.label} ${String(c.hour).padStart(2,'0')}:00`;
-      const tipTxt = `有效Token: ${fmtTok(c.billable_tokens)} · 调用: ${c.calls}次 · 估算 ${fmtUsd(c.est_cost_usd)}`;
+      const tipTitle = `${dLbl} ${String(c.hour).padStart(2,'0')}:00`;
+      const tipTxt = tr('hm_tip', fmtTok(c.billable_tokens), tr('n_calls', c.calls), fmtUsd(c.est_cost_usd));
       html += `<td><div class="hcell" style="background:${bg}" data-tip-title="${esc(tipTitle)}" data-tip="${esc(tipTxt)}"></div></td>`;
     });
     html += '</tr>';
@@ -1143,24 +1306,26 @@ function renderHeatmapAndPools(data) {
   html += '</tbody></table>';
   document.getElementById('heatmap-box').innerHTML = html;
 
-  document.getElementById('win-badge-pool').textContent = WIN_NAMES[currentWin] || currentWin;
+  document.getElementById('win-badge-pool').textContent = winName(currentWin);
   const pools = data.by_pool || [];
   const totalTok = pools.reduce((s, p) => s + (p.billable_tokens || 0), 0);
-  document.getElementById('pool-total-lbl').textContent = `总有效 ${fmtTok(totalTok)}`;
+  document.getElementById('pool-total-lbl').textContent = tr('pool_total', fmtTok(totalTok));
 
-  // Stacked single horizontal bar + compact legend rows
-  const barSegs = pools.map(p => `<div style="width:${p.share_billable_pct}%;background:${POOL_COLORS[p.pool]||'#38bdf8'};height:100%" data-tip-title="${esc(p.label)}" data-tip="${esc(`有效: ${fmtTok(p.billable_tokens)} (${p.share_billable_pct}%) · ${p.calls}次 · ${fmtUsd(p.est_cost_usd)}`)}"></div>`).join('');
+  const barSegs = pools.map(p => {
+    const pName = poolLabel(p.pool);
+    return `<div style="width:${p.share_billable_pct}%;background:${POOL_COLORS[p.pool]||'#38bdf8'};height:100%" data-tip-title="${esc(pName)}" data-tip="${esc(tr('pool_tip', fmtTok(p.billable_tokens), p.share_billable_pct, tr('n_calls', p.calls), fmtUsd(p.est_cost_usd)))}"></div>`;
+  }).join('');
   const listRows = pools.map(p => `
     <span class="legend-item" style="margin-right:10px;">
       <span class="swatch" style="background:${POOL_COLORS[p.pool]||'#38bdf8'}"></span>
-      <span style="color:var(--text)">${esc(p.label.replace(' 系列', '').replace(' 第三方', ''))}</span>
+      <span style="color:var(--text)">${esc(poolLabel(p.pool))}</span>
       <strong>${p.share_billable_pct}%</strong>
       <span style="color:var(--muted)">(${fmtTok(p.billable_tokens)})</span>
     </span>
   `).join('');
   document.getElementById('pool-compact-bars').innerHTML = `
     <div style="display:flex;height:7px;border-radius:99px;overflow:hidden;background:var(--track);margin-bottom:7px;">${barSegs}</div>
-    <div style="display:flex;flex-wrap:wrap;gap:4px 8px;font-size:11px;">${listRows || '<span style="color:var(--muted)">当前窗口暂无调用</span>'}</div>
+    <div style="display:flex;flex-wrap:wrap;gap:4px 8px;font-size:11px;">${listRows || `<span style="color:var(--muted)">${esc(tr('no_calls_win'))}</span>`}</div>
   `;
 }
 
@@ -1170,7 +1335,7 @@ function renderDetailPanes(data) {
   document.getElementById('model-tbody').innerHTML = (data.by_model || []).map(m => `
     <tr>
       <td class="mono" style="color:var(--text-strong)">${esc(m.model)}</td>
-      <td style="color:var(--muted)">${esc(m.pool_label)}</td>
+      <td style="color:var(--muted)">${esc(poolLabel(m.pool))}</td>
       <td class="num">${m.calls}</td>
       <td class="num">${fmtTok(m.input_tokens)}</td>
       <td class="num" style="color:var(--muted)">${fmtTok(m.cache_read_tokens)}</td>
@@ -1178,17 +1343,17 @@ function renderDetailPanes(data) {
       <td class="num" style="color:var(--green)">${m.cache_hit_pct}%</td>
       <td class="num">${fmtUsd(m.est_cost_usd)}</td>
     </tr>
-  `).join('') || '<tr><td colspan="8" style="color:var(--muted);text-align:center">暂无数据</td></tr>';
+  `).join('') || `<tr><td colspan="8" style="color:var(--muted);text-align:center">${esc(tr('no_data'))}</td></tr>`;
 
   document.getElementById('project-list').innerHTML = (data.projects || []).slice(0, 8).map(p => `
     <div style="margin-bottom:8px;">
       <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px;">
-        <span class="mono">${esc(p.workspace)}</span>
-        <span><strong style="font-weight:600">${fmtTok(p.billable_tokens)}</strong> <span style="color:var(--muted)">(${p.share_billable_pct}% · ${p.calls}次)</span></span>
+        <span class="mono">${esc(fmtWs(p.workspace))}</span>
+        <span><strong style="font-weight:600">${fmtTok(p.billable_tokens)}</strong> <span style="color:var(--muted)">(${p.share_billable_pct}% · ${esc(tr('n_calls', p.calls))})</span></span>
       </div>
       <div class="bar-track"><div class="bar-fill" style="width:${p.share_billable_pct}%;background:#3b82f6"></div></div>
     </div>
-  `).join('') || '<div style="color:var(--muted)">暂无数据</div>';
+  `).join('') || `<div style="color:var(--muted)">${esc(tr('no_data'))}</div>`;
 
   const tools = data.top_tools || [];
   const maxTool = Math.max(1, ...tools.map(t => t.count));
@@ -1198,7 +1363,7 @@ function renderDetailPanes(data) {
       <div class="bar-track"><div class="bar-fill" style="width:${(t.count/maxTool*100).toFixed(1)}%;background:#a78bfa"></div></div>
       <span class="num" style="color:var(--muted)">${t.count} (${t.share_pct}%)</span>
     </div>
-  `).join('') || '<div style="color:var(--muted)">暂无工具调用</div>';
+  `).join('') || `<div style="color:var(--muted)">${esc(tr('no_tools'))}</div>`;
 
   document.getElementById('recent-tbody').innerHTML = (data.recent_calls || []).slice(0, 18).map(r => {
     const tns = r.tool_names || [];
@@ -1208,14 +1373,14 @@ function renderDetailPanes(data) {
         <td class="mono" style="color:var(--muted);white-space:nowrap">${esc(r.ts_cst.slice(6))}</td>
         <td>
           <div class="mono" style="color:${POOL_COLORS[r.pool]||'var(--cyan)'}">${esc(r.model)}${toolHtml}</div>
-          <div class="ellipsis" style="font-size:10.5px;color:var(--muted)">${esc(r.title)}</div>
+          <div class="ellipsis" style="font-size:10.5px;color:var(--muted)">${esc(fmtTitle(r.title))}</div>
         </td>
         <td class="num">${fmtTok(r.input_tokens)}</td>
         <td class="num" style="color:var(--muted)">${fmtTok(r.cache_read_tokens)}</td>
         <td class="num">${fmtTok(r.output_tokens)}</td>
       </tr>
     `;
-  }).join('') || '<tr><td colspan="5" style="color:var(--muted);text-align:center">暂无调用</td></tr>';
+  }).join('') || `<tr><td colspan="5" style="color:var(--muted);text-align:center">${esc(tr('no_calls'))}</td></tr>`;
 }
 
 function renderConvTable() {
@@ -1235,33 +1400,33 @@ function renderConvTable() {
   document.getElementById('conv-tbody').innerHTML = rows.map(c => `
     <tr class="clickable" data-session="${esc(c.id)}">
       <td>
-        <div class="ellipsis" style="font-weight:600;color:var(--text-strong);max-width:250px">${esc(c.title)}${c.is_subagent ? '<span class="tag">子代理</span>' : ''}</div>
+        <div class="ellipsis" style="font-weight:600;color:var(--text-strong);max-width:250px">${esc(fmtTitle(c.title))}${c.is_subagent ? `<span class="tag">${esc(tr('subagent_tag'))}</span>` : ''}</div>
         <div class="mono" style="color:var(--muted);font-size:10px">${esc(c.short_id)} · ${esc(c.last_ts_cst)}</div>
       </td>
-      <td class="mono ellipsis" style="color:var(--muted);max-width:120px">${esc(c.workspace)}</td>
+      <td class="mono ellipsis" style="color:var(--muted);max-width:120px">${esc(fmtWs(c.workspace))}</td>
       <td class="num">${c.calls}</td>
       <td class="num" style="font-weight:600;color:var(--text-strong)">${fmtTok(c.billable_tokens)}</td>
       <td class="num" style="color:var(--muted)">${fmtTok(c.peak_context)}</td>
       <td class="num" style="color:var(--green)">${c.cache_hit_pct}%</td>
       <td class="num">${fmtUsd(c.est_cost_usd)}</td>
     </tr>
-  `).join('') || '<tr><td colspan="7" style="color:var(--muted);text-align:center">未匹配到会话</td></tr>';
+  `).join('') || `<tr><td colspan="7" style="color:var(--muted);text-align:center">${esc(tr('no_match'))}</td></tr>`;
 }
 
 async function openSession(cid) {
   if (!cid) return;
   document.getElementById('backdrop').classList.add('open');
   document.getElementById('session-drawer').classList.add('open');
-  document.getElementById('dr-title').textContent = '加载会话详情...';
+  document.getElementById('dr-title').textContent = tr('dr_loading');
   document.getElementById('dr-sub').textContent = cid;
-  document.getElementById('dr-body').innerHTML = '<div style="color:var(--muted)">读取中...</div>';
+  document.getElementById('dr-body').innerHTML = `<div style="color:var(--muted)">${esc(tr('dr_reading'))}</div>`;
 
   try {
     const res = await fetch('/api/session/' + encodeURIComponent(cid), { cache: 'no-store' });
     const d = await res.json();
     const s = d.summary || {};
-    document.getElementById('dr-title').textContent = d.title + (d.is_subagent ? ' [子代理]' : '');
-    document.getElementById('dr-sub').textContent = `${d.short_id} · 工作区 ${d.workspace} · ${s.calls} 轮调用`;
+    document.getElementById('dr-title').textContent = fmtTitle(d.title) + (d.is_subagent ? ` [${tr('subagent_tag')}]` : '');
+    document.getElementById('dr-sub').textContent = tr('dr_sub', d.short_id, fmtWs(d.workspace), s.calls);
 
     const turns = d.turns || [];
     const W = 580, H = 135, padL = 44, padR = 10, padT = 10, padB = 20;
@@ -1275,29 +1440,29 @@ async function openSession(cid) {
 
     document.getElementById('dr-body').innerHTML = `
       <div class="grid grid-4" style="margin-bottom:12px;">
-        <div class="card kpi-card"><div class="card-sub">有效 Token</div><div style="font-size:14px;font-weight:650;color:var(--cyan);margin-top:2px">${fmtTok(s.billable_tokens)}</div></div>
-        <div class="card kpi-card"><div class="card-sub">峰值上下文</div><div style="font-size:14px;font-weight:650;color:var(--purple);margin-top:2px">${fmtTok(d.peak_context)}</div></div>
-        <div class="card kpi-card"><div class="card-sub">缓存命中率</div><div style="font-size:14px;font-weight:650;color:var(--green);margin-top:2px">${s.cache_hit_pct}%</div></div>
-        <div class="card kpi-card"><div class="card-sub">估算 / 省额</div><div style="font-size:13px;font-weight:650;margin-top:2px">${fmtUsd(s.est_cost_usd)} / <span style="color:var(--green)">${fmtUsd(s.cache_saved_usd)}</span></div></div>
+        <div class="card kpi-card"><div class="card-sub">${esc(tr('dr_bill'))}</div><div style="font-size:14px;font-weight:650;color:var(--cyan);margin-top:2px">${fmtTok(s.billable_tokens)}</div></div>
+        <div class="card kpi-card"><div class="card-sub">${esc(tr('dr_peak'))}</div><div style="font-size:14px;font-weight:650;color:var(--purple);margin-top:2px">${fmtTok(d.peak_context)}</div></div>
+        <div class="card kpi-card"><div class="card-sub">${esc(tr('dr_hit'))}</div><div style="font-size:14px;font-weight:650;color:var(--green);margin-top:2px">${s.cache_hit_pct}%</div></div>
+        <div class="card kpi-card"><div class="card-sub">${esc(tr('dr_cost_save'))}</div><div style="font-size:13px;font-weight:650;margin-top:2px">${fmtUsd(s.est_cost_usd)} / <span style="color:var(--green)">${fmtUsd(s.cache_saved_usd)}</span></div></div>
       </div>
 
-      <div style="font-size:11.5px;font-weight:600;margin-bottom:5px;color:var(--text-strong)">上下文窗口膨胀曲线</div>
+      <div style="font-size:11.5px;font-weight:600;margin-bottom:5px;color:var(--text-strong)">${esc(tr('dr_curve'))}</div>
       <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:135px;background:var(--chip-bg);border-radius:8px;border:1px solid var(--border);margin-bottom:12px;">
         <polygon points="${areaPts}" fill="rgba(56,189,248,0.14)" />
         <polyline points="${pts.join(' ')}" fill="none" stroke="#38bdf8" stroke-width="2" />
         <text x="6" y="16" fill="var(--muted)" font-size="9.5">${fmtTok(maxCtx)}</text>
         <text x="6" y="${H - 6}" fill="var(--muted)" font-size="9.5">0</text>
-        <text x="${W - 8}" y="${H - 6}" text-anchor="end" fill="var(--muted)" font-size="9.5">共 ${turns.length} 轮</text>
+        <text x="${W - 8}" y="${H - 6}" text-anchor="end" fill="var(--muted)" font-size="9.5">${esc(tr('dr_turns_cnt', turns.length))}</text>
       </svg>
 
       ${(d.tools || []).length ? `<div style="margin-bottom:12px;">
-        <div style="font-size:11.5px;font-weight:600;margin-bottom:5px;color:var(--text-strong)">工具调用统计</div>
+        <div style="font-size:11.5px;font-weight:600;margin-bottom:5px;color:var(--text-strong)">${esc(tr('dr_tools'))}</div>
         <div>${d.tools.map(t => `<span class="tool-pill">${esc(t.name)} ×${t.count}</span>`).join(' ')}</div>
       </div>` : ''}
 
-      <div style="font-size:11.5px;font-weight:600;margin-bottom:5px;color:var(--text-strong)">逐轮记录（最新在前）</div>
+      <div style="font-size:11.5px;font-weight:600;margin-bottom:5px;color:var(--text-strong)">${esc(tr('dr_turns_tbl'))}</div>
       <table>
-        <thead><tr><th>#</th><th>时间</th><th>模型</th><th class="num">上下文</th><th class="num">新增</th><th class="num">输出</th></tr></thead>
+        <thead><tr><th>#</th><th>${esc(tr('th_time'))}</th><th>${esc(tr('th_model'))}</th><th class="num">${esc(tr('dr_th_ctx'))}</th><th class="num">${esc(tr('th_in_short'))}</th><th class="num">${esc(tr('th_out'))}</th></tr></thead>
         <tbody>
           ${turns.slice().reverse().slice(0, 80).map(t => `
             <tr>
@@ -1313,7 +1478,7 @@ async function openSession(cid) {
       </table>
     `;
   } catch (e) {
-    document.getElementById('dr-body').innerHTML = `<div style="color:var(--red)">加载失败: ${esc(e)}</div>`;
+    document.getElementById('dr-body').innerHTML = `<div style="color:var(--red)">${esc(tr('dr_err', e))}</div>`;
   }
 }
 
@@ -1323,34 +1488,50 @@ function closeOverlays() {
   document.getElementById('quota-modal').classList.remove('open');
 }
 
+function renderAll(data) {
+  document.getElementById('subtitle').textContent = tr('synced_sub', data.generated_at_cst, winName(currentWin));
+  const tzLbl = data.timezone_label || 'UTC+8';
+  const tzEl = document.getElementById('tz-lbl');
+  if (tzEl) tzEl.textContent = tzLbl;
+  const mTzEl = document.getElementById('modal-tz-lbl');
+  if (mTzEl) mTzEl.textContent = tzLbl;
+  const nOn = !!(data.notifications && data.notifications.enabled);
+  const nBtn = document.getElementById('notify-btn');
+  if (nBtn) {
+    nBtn.textContent = nOn ? tr('ntf_on') : tr('ntf_off');
+    nBtn.classList.toggle('live-on', nOn);
+  }
+  renderBanner(data);
+  renderInsights(data);
+  renderQuota(data);
+  renderKPIs(data);
+  renderMainChart(data);
+  renderHeatmapAndPools(data);
+  renderDetailPanes(data);
+}
+
 async function refresh() {
   try {
     const res = await fetch('/api/stats?window=' + encodeURIComponent(currentWin), { cache: 'no-store' });
     const data = await res.json();
     lastData = data;
-    document.getElementById('subtitle').textContent = `同步于 ${data.generated_at_cst} · 统计窗口：${WIN_NAMES[currentWin] || currentWin}`;
-    const tzLbl = data.timezone_label || 'UTC+8';
-    const tzEl = document.getElementById('tz-lbl');
-    if (tzEl) tzEl.textContent = tzLbl;
-    const mTzEl = document.getElementById('modal-tz-lbl');
-    if (mTzEl) mTzEl.textContent = tzLbl;
-    const nOn = !!(data.notifications && data.notifications.enabled);
-    const nBtn = document.getElementById('notify-btn');
-    if (nBtn) {
-      nBtn.textContent = nOn ? '🔔 提醒: 开' : '🔔 提醒: 关';
-      nBtn.classList.toggle('live-on', nOn);
-    }
-    renderBanner(data);
-    renderInsights(data);
-    renderQuota(data);
-    renderKPIs(data);
-    renderMainChart(data);
-    renderHeatmapAndPools(data);
-    renderDetailPanes(data);
+    renderAll(data);
   } catch (err) {
-    document.getElementById('subtitle').textContent = '同步中断: ' + err;
+    document.getElementById('subtitle').textContent = tr('sync_err', err);
   }
 }
+
+applyStaticI18n();
+
+document.getElementById('lang-select').addEventListener('change', (e) => {
+  const val = e.target.value;
+  if (I18N[val]) {
+    currentLang = val;
+    localStorage.setItem(LANG_KEY, val);
+    applyStaticI18n();
+    if (lastData) renderAll(lastData);
+  }
+});
 
 // Controls binding
 document.querySelectorAll('#win-pills .pill').forEach(btn => {
@@ -1407,7 +1588,9 @@ document.getElementById('live-btn').addEventListener('click', () => {
   liveEnabled = !liveEnabled;
   const b = document.getElementById('live-btn');
   b.classList.toggle('live-on', liveEnabled);
-  b.innerHTML = liveEnabled ? '<span class="dot ok"></span>实时 3s' : '<span class="dot"></span>已暂停';
+  b.innerHTML = liveEnabled
+    ? `<span class="dot ok"></span><span id="live-btn-lbl">${esc(tr('live_on'))}</span>`
+    : `<span class="dot"></span><span id="live-btn-lbl">${esc(tr('live_off'))}</span>`;
   if (pollTimer) clearInterval(pollTimer);
   if (liveEnabled) pollTimer = setInterval(refresh, 3000);
 });
@@ -1447,7 +1630,7 @@ document.getElementById('mq-save-btn').addEventListener('click', async () => {
   const reset = document.getElementById('mq-reset').value.trim();
   const msg = document.getElementById('mq-msg');
   if (isNaN(used) || used < 0 || used > 100) {
-    msg.textContent = '请输入 0~100 之间的已使用百分比';
+    msg.textContent = tr('mq_err_range');
     return;
   }
   try {
@@ -1458,13 +1641,13 @@ document.getElementById('mq-save-btn').addEventListener('click', async () => {
     });
     const out = await res.json();
     if (!res.ok || !out.ok) {
-      msg.textContent = out.error || '保存失败';
+      msg.textContent = out.error || tr('mq_err_save');
       return;
     }
     closeOverlays();
     refresh();
   } catch (e) {
-    msg.textContent = '请求失败: ' + e;
+    msg.textContent = tr('mq_err_req', e);
   }
 });
 
@@ -1476,3 +1659,5 @@ pollTimer = setInterval(refresh, 3000);
 </body>
 </html>
 """
+
+DASHBOARD_HTML = _DASHBOARD_TEMPLATE.replace("__LANG_OPTIONS_JSON__", LANG_OPTIONS_JS).replace("__WEB_I18N_JSON__", WEB_I18N_JS)

@@ -111,7 +111,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let pillXKey = "AGYUsagePillOriginX"
     private let pillYKey = "AGYUsagePillOriginY"
     private let appearanceKey = "AGYUsageAppearance"
+    private let langPrefKey = "AGYUsageLangPref"
     private let pillHeight: CGFloat = 28
+
+    private var langPref: String {
+        get {
+            let v = UserDefaults.standard.string(forKey: langPrefKey) ?? "auto"
+            if v == "zh-CN" || v == "zh-TW" || v == "en" || v == "auto" { return v }
+            return "auto"
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: langPrefKey)
+        }
+    }
+
+    private func resolvedLang() -> String {
+        if langPref != "auto" { return langPref }
+        let first = (Locale.preferredLanguages.first ?? "en").lowercased()
+        if first.contains("hant") || first.contains("zh-tw") || first.contains("zh-hk") || first.contains("zh-mo") {
+            return "zh-TW"
+        }
+        if first.hasPrefix("zh") { return "zh-CN" }
+        return "en"
+    }
+
+    private func tr(_ cn: String, _ tw: String, _ en: String) -> String {
+        switch resolvedLang() {
+        case "zh-CN": return cn
+        case "zh-TW": return tw
+        default: return en
+        }
+    }
 
     private struct ThemePalette {
         let gemTag: NSColor
@@ -260,7 +290,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         setupFloatingPill()
         applyAppearance()
-        updateIndicators(compactBar: "AGY", pillText: "AGY 连接中…", level: "ok")
+        updateIndicators(compactBar: "AGY", pillText: tr("AGY 连接中…", "AGY 連線中…", "AGY Connecting…"), level: "ok")
         rebuildMenu()
         updatePillVisibility()
         fetchStats(autoStartDaemon: true)
@@ -568,7 +598,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         self.lastAutoRecovery = Date()
                         self.startDaemonSilently()
                     }
-                    self.updateIndicators(compactBar: "AGY", pillText: "AGY 离线 (点此恢复)", level: "warning")
+                    self.updateIndicators(compactBar: "AGY", pillText: self.tr("AGY 离线 (点此恢复)", "AGY 離線 (點此恢復)", "AGY Offline (Click)"), level: "warning")
                     self.rebuildMenu()
                 }
             }
@@ -611,8 +641,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func makeBucketMenuItem(_ b: QuotaBucket, pal: ThemePalette) -> NSMenuItem {
         let used = b.used_pct ?? 0.0
         let exp = b.reset_passed == true
-        let tag = b.window_kind == "five_hour" ? "当前5h" : "每周7d"
-        let rst = exp ? "待刷新" : "重置 \(b.reset_time_cst ?? "-")"
+        let tag = b.window_kind == "five_hour"
+            ? tr("当前5h", "當前5h", "5h Win")
+            : tr("每周7d", "每週7d", "7d Wk ")
+        let rst = exp
+            ? tr("待刷新", "待更新", "Refresh")
+            : "\(tr("重置", "重置", "Resets")) \(b.reset_time_cst ?? "-")"
+        let usedWord = tr("已用", "已用", "Used")
         let mono = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
         let monoBold = NSFont.monospacedSystemFont(ofSize: 11, weight: .semibold)
         let valCol = valueColor(usedPct: used, expired: exp, pal: pal)
@@ -620,7 +655,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let attr = NSMutableAttributedString()
         attr.append(NSAttributedString(string: "  \(tag)  ", attributes: [.font: mono, .foregroundColor: NSColor.labelColor]))
         attr.append(NSAttributedString(string: asciiBar(used), attributes: [.font: mono, .foregroundColor: valCol]))
-        attr.append(NSAttributedString(string: String(format: "  已用 %5.1f%%", used), attributes: [.font: monoBold, .foregroundColor: valCol]))
+        attr.append(NSAttributedString(string: String(format: "  %@ %5.1f%%", usedWord, used), attributes: [.font: monoBold, .foregroundColor: valCol]))
         attr.append(NSAttributedString(string: "  (\(rst))", attributes: [.font: mono, .foregroundColor: NSColor.secondaryLabelColor]))
 
         let item = NSMenuItem(title: attr.string, action: nil, keyEquivalent: "")
@@ -636,12 +671,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let tier = (st.live_session.plan_tier ?? "").isEmpty || st.live_session.plan_tier == "-"
                 ? ""
                 : " · \(st.live_session.plan_tier!)"
-            let hdr = NSMenuItem(title: "Antigravity 实时监控\(tier)", action: nil, keyEquivalent: "")
+            let hdr = NSMenuItem(title: "\(tr("Antigravity 实时监控", "Antigravity 即時監控", "Antigravity Live Monitor"))\(tier)", action: nil, keyEquivalent: "")
             hdr.attributedTitle = NSAttributedString(string: hdr.title, attributes: [
                 .font: NSFont.systemFont(ofSize: 12, weight: .bold)
             ])
             menu.addItem(hdr)
-            menu.addItem(makeDisabledItem("主模型: \(st.live_session.active_model ?? "-")"))
+            menu.addItem(makeDisabledItem("\(tr("主模型", "主模型", "Model")): \(st.live_session.active_model ?? "-")"))
             menu.addItem(NSMenuItem.separator())
 
             if st.quota.has_live_quota {
@@ -650,7 +685,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let cldBuckets = st.quota.buckets.filter { $0.pool_key == "claude_gpt" }
 
                 if !gemBuckets.isEmpty {
-                    menu.addItem(makeDisabledItem("▸ Google Gemini 模型池", color: pal.gemTag, bold: true))
+                    menu.addItem(makeDisabledItem(tr("▸ Google Gemini 模型池", "▸ Google Gemini 模型池", "▸ Google Gemini Pool"), color: pal.gemTag, bold: true))
                     for b in gemBuckets {
                         menu.addItem(makeBucketMenuItem(b, pal: pal))
                     }
@@ -658,76 +693,94 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
                 if !cldBuckets.isEmpty {
                     if !gemBuckets.isEmpty { menu.addItem(NSMenuItem.separator()) }
-                    menu.addItem(makeDisabledItem("▸ Claude / GPT 第三方池", color: pal.cldTag, bold: true))
+                    menu.addItem(makeDisabledItem(tr("▸ Claude / GPT 第三方池", "▸ Claude / GPT 第三方池", "▸ Claude / GPT Pool (3P)"), color: pal.cldTag, bold: true))
                     for b in cldBuckets {
                         menu.addItem(makeBucketMenuItem(b, pal: pal))
                     }
                 }
             } else {
-                menu.addItem(makeDisabledItem("等待新开的 Antigravity 会话推送实时额度"))
+                menu.addItem(makeDisabledItem(tr("等待新开的 Antigravity 会话推送实时额度", "等待新開的 Antigravity 對話推送即時額度", "Waiting for new Antigravity chat to push quota")))
             }
 
             menu.addItem(NSMenuItem.separator())
             if let wt = st.windows["today"], let w7 = st.windows["7d"] {
-                menu.addItem(makeDisabledItem("今日有效: \(fmtTokens(wt.billable_tokens)) (\(wt.calls)次)"))
-                let wowTxt = st.week_over_week?.badge_text ?? ""
-                let wowBit = wowTxt.isEmpty ? "" : " · \(wowTxt)"
-                menu.addItem(makeDisabledItem(String(format: "近7日有效: %@%@ · 省 $%.0f",
-                                                     fmtTokens(w7.billable_tokens), wowBit, w7.cache_saved_usd)))
+                menu.addItem(makeDisabledItem(tr("今日有效: \(fmtTokens(wt.billable_tokens)) (\(wt.calls)次)",
+                                                 "今日有效: \(fmtTokens(wt.billable_tokens)) (\(wt.calls)次)",
+                                                 "Today: \(fmtTokens(wt.billable_tokens)) (\(wt.calls) calls)")))
+                menu.addItem(makeDisabledItem(String(format: tr("近7日有效: %@ · 省 $%.0f", "近7日有效: %@ · 省 $%.0f", "Last 7d: %@ · Saved $%.0f"),
+                                                     fmtTokens(w7.billable_tokens), w7.cache_saved_usd)))
             }
-            menu.addItem(makeDisabledItem("同步于 \(st.generated_at_cst)"))
+            menu.addItem(makeDisabledItem("\(tr("同步于", "同步於", "Synced")) \(st.generated_at_cst)"))
         } else {
-            menu.addItem(makeDisabledItem("本地监控服务离线 (127.0.0.1:\(port))"))
-            let startItem = NSMenuItem(title: "立即启动本地监控服务", action: #selector(manualRefresh), keyEquivalent: "s")
+            menu.addItem(makeDisabledItem("\(tr("本地监控服务离线", "本機監控服務離線", "Local service offline")) (127.0.0.1:\(port))"))
+            let startItem = NSMenuItem(title: tr("立即启动本地监控服务", "立即啟動本機監控服務", "Start Local Monitor Service"), action: #selector(manualRefresh), keyEquivalent: "s")
             startItem.target = self
             menu.addItem(startItem)
         }
 
         menu.addItem(NSMenuItem.separator())
 
-        let openItem = NSMenuItem(title: "打开完整 Web 监控台", action: #selector(openDashboard), keyEquivalent: "o")
+        let openItem = NSMenuItem(title: tr("打开完整 Web 监控台 (11国语言)", "開啟完整 Web 監控台 (11國語言)", "Open Web Dashboard (11 Languages)"), action: #selector(openDashboard), keyEquivalent: "o")
         openItem.target = self
         menu.addItem(openItem)
 
-        let refItem = NSMenuItem(title: "立即刷新", action: #selector(manualRefresh), keyEquivalent: "r")
+        let refItem = NSMenuItem(title: tr("立即刷新", "立即重新整理", "Refresh Now"), action: #selector(manualRefresh), keyEquivalent: "r")
         refItem.target = self
         menu.addItem(refItem)
 
         let appearMenu = NSMenu()
-        for pair in [("浅色", "light"), ("通透", "tongtou"), ("深色", "dark"), ("跟随系统", "system")] {
+        let appearChoices = [
+            (tr("浅色", "淺色", "Light"), "light"),
+            (tr("通透", "通透", "Airy"), "tongtou"),
+            (tr("深色", "深色", "Dark"), "dark"),
+            (tr("跟随系统", "跟隨系統", "System"), "system")
+        ]
+        for pair in appearChoices {
             let it = NSMenuItem(title: pair.0, action: #selector(setAppearancePref(_:)), keyEquivalent: "")
             it.target = self
             it.representedObject = pair.1
             it.state = appearancePref == pair.1 ? .on : .off
             appearMenu.addItem(it)
         }
-        let appearRoot = NSMenuItem(title: "外观", action: nil, keyEquivalent: "")
+        let appearRoot = NSMenuItem(title: tr("外观", "外觀", "Appearance"), action: nil, keyEquivalent: "")
         appearRoot.submenu = appearMenu
         menu.addItem(appearRoot)
 
-        let pillToggle = NSMenuItem(title: "显示桌面悬浮胶囊（防刘海遮挡）", action: #selector(togglePill), keyEquivalent: "")
+        let langMenu = NSMenu()
+        for pair in [(tr("跟随系统", "跟隨系統", "Auto (System)"), "auto"), ("简体中文", "zh-CN"), ("繁體中文", "zh-TW"), ("English", "en")] {
+            let it = NSMenuItem(title: pair.0, action: #selector(setLangPref(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = pair.1
+            it.state = langPref == pair.1 ? .on : .off
+            langMenu.addItem(it)
+        }
+        let langRoot = NSMenuItem(title: tr("语言 / Language", "語言 / Language", "Language / 语言"), action: nil, keyEquivalent: "")
+        langRoot.submenu = langMenu
+        menu.addItem(langRoot)
+
+        let pillToggle = NSMenuItem(title: tr("显示桌面悬浮胶囊（防刘海遮挡）", "顯示桌面懸浮膠囊（防瀏海遮擋）", "Show Floating Desktop Pill"), action: #selector(togglePill), keyEquivalent: "")
         pillToggle.target = self
         pillToggle.state = showFloatingPill ? .on : .off
         menu.addItem(pillToggle)
 
-        let resetPosItem = NSMenuItem(title: "重置悬浮胶囊位置", action: #selector(resetPillPosition), keyEquivalent: "")
+        let resetPosItem = NSMenuItem(title: tr("重置悬浮胶囊位置", "重置懸浮膠囊位置", "Reset Pill Position"), action: #selector(resetPillPosition), keyEquivalent: "")
         resetPosItem.target = self
         menu.addItem(resetPosItem)
 
         let notifyOn = lastStats?.notifications?.enabled ?? false
-        let notifyItem = NSMenuItem(title: "额度告警与回血通知 (80%/95%)", action: #selector(toggleNotifications), keyEquivalent: "")
+        let notifyItem = NSMenuItem(title: tr("额度告警与回血通知 (80%/95%)", "額度告警與回血通知 (80%/95%)", "Quota Alerts & Reset Notify (80%/95%)"), action: #selector(toggleNotifications), keyEquivalent: "")
         notifyItem.target = self
         notifyItem.state = notifyOn ? .on : .off
         menu.addItem(notifyItem)
 
-        let autoItem = NSMenuItem(title: "登录时自动启动", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
+        let autoItem = NSMenuItem(title: tr("登录时自动启动", "登入時自動啟動", "Launch at Login"), action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         autoItem.target = self
         autoItem.state = FileManager.default.fileExists(atPath: launchAgentURL.path) ? .on : .off
         menu.addItem(autoItem)
 
         menu.addItem(NSMenuItem.separator())
 
-        let quitItem = NSMenuItem(title: "退出小工具", action: #selector(quitApp), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: tr("退出小工具", "結束小工具", "Quit"), action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
 
@@ -788,6 +841,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildMenu()
         if let st = lastStats {
             applyStats(st)
+        }
+    }
+
+    @objc private func setLangPref(_ sender: NSMenuItem) {
+        guard let val = sender.representedObject as? String else { return }
+        langPref = val
+        rebuildMenu()
+        if let st = lastStats {
+            applyStats(st)
+        } else {
+            updateIndicators(compactBar: "AGY", pillText: tr("AGY 离线 (点此恢复)", "AGY 離線 (點此恢復)", "AGY Offline (Click)"), level: "warning")
         }
     }
 

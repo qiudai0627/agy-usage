@@ -14,6 +14,8 @@ mkdir -p "$PKG_DIR/src" "$PKG_DIR/macos" "$PKG_DIR/windows" "$PKG_DIR/scripts" \
 # Explicit file manifest (never globs untracked private scripts)
 ROOT_FILES=(
   README.md
+  README_EN.md
+  README_ZH-TW.md
   LICENSE
   .gitignore
   install.sh
@@ -28,7 +30,7 @@ for f in "${ROOT_FILES[@]}"; do
   cp "$ROOT_DIR/$f" "$PKG_DIR/$f"
 done
 
-SRC_FILES=(cli.py core.py statusline.py web_ui.py)
+SRC_FILES=(cli.py core.py i18n.py statusline.py web_ui.py)
 for f in "${SRC_FILES[@]}"; do
   cp "$ROOT_DIR/src/$f" "$PKG_DIR/src/$f"
 done

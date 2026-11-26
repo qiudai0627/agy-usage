@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC_DIR="$ROOT_DIR/src"
 
 echo "==> 1. Python 语法编译与脚本编码门禁检查"
-python3 -m py_compile "$SRC_DIR/core.py" "$SRC_DIR/statusline.py" "$SRC_DIR/web_ui.py" "$SRC_DIR/cli.py" "$ROOT_DIR/windows/tray_widget.pyw" "$ROOT_DIR/tests/test_suite.py"
+python3 -m py_compile "$SRC_DIR/core.py" "$SRC_DIR/i18n.py" "$SRC_DIR/statusline.py" "$SRC_DIR/web_ui.py" "$SRC_DIR/cli.py" "$ROOT_DIR/windows/tray_widget.pyw" "$ROOT_DIR/tests/test_suite.py"
 
 ROOT_DIR="$ROOT_DIR" SRC_DIR="$SRC_DIR" python3 - <<'PY'
 import os, re, sys

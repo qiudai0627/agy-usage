@@ -837,6 +837,69 @@ print("CANDIDATE_B_TZ_OK")
         self.assertEqual(tw._val_color(10.0, True, tt), tt["expired"])
         self.assertNotEqual(tw._val_color(55.0, False, tt).upper(), "#9A7B4F")
 
+    def test_i18n_11_languages_parity_and_readmes(self) -> None:
+        sys.path.insert(0, str(SRC_DIR))
+        import i18n
+        import statusline
+        import web_ui
+
+        expected_langs = ["zh-CN", "zh-TW", "en", "ja", "ko", "es", "pt-BR", "de", "fr", "ru", "vi"]
+        self.assertEqual([code for code, _ in i18n.LANG_OPTIONS], expected_langs)
+        base_keys = set(i18n.WEB_I18N["en"].keys())
+        self.assertGreater(len(base_keys), 100)
+
+        ph_re = re.compile(r"\{\d+\}")
+        for lang in expected_langs:
+            self.assertIn(lang, i18n.WEB_I18N)
+            d = i18n.WEB_I18N[lang]
+            self.assertEqual(set(d.keys()), base_keys, f"Key mismatch in {lang}")
+            self.assertEqual(len(d["weekdays"]), 7, f"Weekdays length != 7 in {lang}")
+            for k, val in d.items():
+                if k == "weekdays":
+                    continue
+                self.assertTrue(isinstance(val, str) and len(val.strip()) > 0, f"Empty {lang}.{k}")
+                self.assertEqual(
+                    set(ph_re.findall(val)),
+                    set(ph_re.findall(i18n.WEB_I18N["en"][k])),
+                    f"Placeholder mismatch in {lang}.{k}",
+                )
+
+        # Every data-i18n* attribute in web_ui.DASHBOARD_HTML must exist in WEB_I18N
+        html = web_ui.DASHBOARD_HTML
+        for attr in ("data-i18n", "data-i18n-ph", "data-i18n-title"):
+            for key in re.findall(rf'{attr}="([^"]+)"', html):
+                self.assertIn(key, base_keys, f"HTML {attr}={key!r} missing from WEB_I18N")
+
+        # Statusline zh-TW & en rendering and >=16 margin
+        fut_5h = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat()
+        fut_w = (datetime.now(timezone.utc) + timedelta(days=5)).isoformat()
+        payload = {
+            "agent_state": "idle",
+            "stack_with_default": True,
+            "context_window": {"used_percentage": 25.0},
+            "quota": {
+                "gemini-5h": {"remaining_fraction": 0.80, "reset_time": fut_5h},
+                "gemini-weekly": {"remaining_fraction": 0.85, "reset_time": fut_w},
+                "3p-5h": {"remaining_fraction": 0.70, "reset_time": fut_5h},
+                "3p-weekly": {"remaining_fraction": 0.50, "reset_time": fut_w},
+            },
+        }
+        for lg, expected_tok in (("en", "Used"), ("zh-TW", "Gemini週")):
+            out_wide = statusline.render(dict(payload, lang=lg, terminal_width=140))
+            clean_wide = re.sub(r"\x1b\[[0-9;]*m", "", out_wide)
+            self.assertIn(expected_tok, clean_wide)
+            self.assertLessEqual(statusline.display_width(out_wide), 140 - 16)
+            out_narrow = statusline.render(dict(payload, lang=lg, terminal_width=52))
+            self.assertLessEqual(statusline.display_width(out_narrow), 52 - 16)
+
+        # Tri-lingual READMEs check
+        for rname in ("README.md", "README_ZH-TW.md", "README_EN.md"):
+            txt = (ROOT_DIR / rname).read_text(encoding="utf-8")
+            main_part = txt.split("<details>")[0]
+            self.assertNotIn("transcript.jsonl", main_part, f"Jargon leaked in {rname}")
+            self.assertNotIn("statusLine", main_part, f"Jargon leaked in {rname}")
+            self.assertIn("qiudai0627/agy-usage", txt, f"Repo link missing in {rname}")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

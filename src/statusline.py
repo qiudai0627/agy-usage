@@ -39,6 +39,61 @@ from core import (  # noqa: E402
     parse_iso_dt,
     record_quota_snapshot,
 )
+from i18n import resolve_cli_lang  # noqa: E402
+
+STATUS_L10N: Dict[str, Dict[str, Any]] = {
+    "zh-CN": {
+        "slots": [("g5h", "Gemini5h", "G5h"), ("gw", "Gemini周", "G周"), ("c5h", "Claude5h", "C5h"), ("cw", "Claude周", "C周")],
+        "used": "已用",
+        "ctx": "上下文",
+        "ref_long": "待刷新",
+        "ref_short": "待刷",
+        "sub": "子:",
+        "wait": "agy-usage: 等待状态数据...",
+        "narrow": [
+            "窗口过窄，完整四桶已用请看网页 (agy-usage)",
+            "窗口过窄，完整四桶请看网页 agy-usage",
+            "窗口过窄，请看网页 agy-usage",
+            "看网页:agy-usage",
+            "看网页",
+            "网页",
+        ],
+    },
+    "zh-TW": {
+        "slots": [("g5h", "Gemini5h", "G5h"), ("gw", "Gemini週", "G週"), ("c5h", "Claude5h", "C5h"), ("cw", "Claude週", "C週")],
+        "used": "已用",
+        "ctx": "上下文",
+        "ref_long": "待更新",
+        "ref_short": "待更",
+        "sub": "子:",
+        "wait": "agy-usage: 等待狀態資料...",
+        "narrow": [
+            "視窗過窄，完整四格已用請看網頁 (agy-usage)",
+            "視窗過窄，完整四格請看網頁 agy-usage",
+            "視窗過窄，請看網頁 agy-usage",
+            "看網頁:agy-usage",
+            "看網頁",
+            "網頁",
+        ],
+    },
+    "en": {
+        "slots": [("g5h", "Gemini5h", "G5h"), ("gw", "GeminiWk", "GWk"), ("c5h", "Claude5h", "C5h"), ("cw", "ClaudeWk", "CWk")],
+        "used": "Used ",
+        "ctx": "Context",
+        "ref_long": "Refresh",
+        "ref_short": "Ref",
+        "sub": "Sub:",
+        "wait": "agy-usage: waiting for telemetry...",
+        "narrow": [
+            "Window narrow, see all 4 quotas on Web (agy-usage)",
+            "Window narrow, see Web UI (agy-usage)",
+            "Narrow: check Web agy-usage",
+            "Web:agy-usage",
+            "Web UI",
+            "Web",
+        ],
+    },
+}
 
 # ANSI styling
 RESET = "\033[0m"
@@ -171,13 +226,15 @@ def persist_state(payload: Dict[str, Any]) -> None:
             sys.stderr.write(f"agy-usage persist warning: {exc}\n")
 
 
-def extract_four_slots(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+def extract_four_slots(payload: Dict[str, Any], lang: str = "zh-CN") -> List[Dict[str, Any]]:
     """Return fixed 4 slots in locked order: Gemini 5h, Gemini 周, Claude/GPT 5h, Claude/GPT 周."""
+    loc = STATUS_L10N.get(lang, STATUS_L10N["zh-CN"])
+    s_lbls = loc["slots"]
     slots_meta = [
-        ("g5h", "Gemini5h", "G5h", "gemini", "five_hour"),
-        ("gw", "Gemini周", "G周", "gemini", "weekly"),
-        ("c5h", "Claude5h", "C5h", "claude_gpt", "five_hour"),
-        ("cw", "Claude周", "C周", "claude_gpt", "weekly"),
+        (s_lbls[0][0], s_lbls[0][1], s_lbls[0][2], "gemini", "five_hour"),
+        (s_lbls[1][0], s_lbls[1][1], s_lbls[1][2], "gemini", "weekly"),
+        (s_lbls[2][0], s_lbls[2][1], s_lbls[2][2], "claude_gpt", "five_hour"),
+        (s_lbls[3][0], s_lbls[3][1], s_lbls[3][2], "claude_gpt", "weekly"),
     ]
     quota = payload.get("quota") if isinstance(payload.get("quota"), dict) else {}
     now = datetime.now(timezone.utc)
@@ -257,15 +314,18 @@ def _fmt_pct(u: float, tight: bool = False) -> str:
     return f"{r:.1f}%"
 
 
-def _render_slot(s: Dict[str, Any], tier: int) -> str:
+def _render_slot(s: Dict[str, Any], tier: int, lang: str = "zh-CN") -> str:
     """Render one bucket at tier 0 (richest) .. tier 4 (tightest), never dropping the bucket."""
+    loc = STATUS_L10N.get(lang, STATUS_L10N["zh-CN"])
+    used_kw = loc["used"]
+    used_tight = used_kw.strip() if lang != "en" else "U:"
     lbl = s["full"] if tier <= 2 else s["short"]
     pool_col = CYAN if s["key"].startswith("g") else MAGENTA
     lbl_s = f"{pool_col}{lbl}{RESET}"
     if s["state"] == "missing":
         return f"{lbl_s} {DIM}—{RESET}" if tier <= 3 else f"{lbl_s}:{DIM}—{RESET}"
     if s["state"] == "expired":
-        return f"{lbl_s} {DIM}待刷新{RESET}" if tier <= 2 else f"{lbl_s}:{DIM}待刷{RESET}"
+        return f"{lbl_s} {DIM}{loc['ref_long']}{RESET}" if tier <= 2 else f"{lbl_s}:{DIM}{loc['ref_short']}{RESET}"
 
     u = float(s["used_pct"])
     col = used_color(u)
@@ -276,15 +336,15 @@ def _render_slot(s: Dict[str, Any], tier: int) -> str:
             rst = f" {DIM}{fmt_cst(s['reset_dt'], '%m-%d %H:%M')}{RESET}"
         elif s.get("reset_sec") is not None:
             rst = f" {DIM}{short_countdown(s['reset_sec'])}{RESET}"
-        return f"{lbl_s} {bar_s}{col}已用{_fmt_pct(u)}{RESET}{rst}"
+        return f"{lbl_s} {bar_s}{col}{used_kw}{_fmt_pct(u)}{RESET}{rst}"
     if tier == 1:
         bar_s = f"{col}{mini_bar(u, 4)}{RESET} "
-        return f"{lbl_s} {bar_s}{col}已用{_fmt_pct(u)}{RESET}"
+        return f"{lbl_s} {bar_s}{col}{used_kw}{_fmt_pct(u)}{RESET}"
     if tier == 2:
-        return f"{lbl_s} {col}已用{_fmt_pct(u)}{RESET}"
+        return f"{lbl_s} {col}{used_kw}{_fmt_pct(u)}{RESET}"
     if tier == 3:
-        return f"{lbl_s} {col}已用{_fmt_pct(u, tight=True)}{RESET}"
-    return f"{lbl_s}{col}已用{_fmt_pct(u, tight=True)}{RESET}"
+        return f"{lbl_s} {col}{used_kw}{_fmt_pct(u, tight=True)}{RESET}"
+    return f"{lbl_s}{col}{used_tight}{_fmt_pct(u, tight=True)}{RESET}"
 
 
 def _render_candidate(
@@ -295,7 +355,9 @@ def _render_candidate(
     slots: List[Dict[str, Any]],
     running_subs: int,
     tier: int,
+    lang: str = "zh-CN",
 ) -> str:
+    loc = STATUS_L10N.get(lang, STATUS_L10N["zh-CN"])
     sep = f" {DIM}│{RESET} " if tier <= 3 else " "
     parts: List[str] = [icon]
     if model_seg and tier <= 2:
@@ -305,24 +367,26 @@ def _render_candidate(
         cc = ctx_color(ctx_pct)
         if tier == 0:
             tok_s = f" {DIM}{fmt_tokens(ctx_tok)}{RESET}" if ctx_tok > 0 else ""
-            parts.append(f"上下文 {cc}{mini_bar(ctx_pct, 4)} {ctx_pct:.1f}%{RESET}{tok_s}")
+            parts.append(f"{loc['ctx']} {cc}{mini_bar(ctx_pct, 4)} {ctx_pct:.1f}%{RESET}{tok_s}")
         elif tier <= 2:
-            parts.append(f"上下文 {cc}{ctx_pct:.0f}%{RESET}")
+            parts.append(f"{loc['ctx']} {cc}{ctx_pct:.0f}%{RESET}")
         elif tier == 3:
             parts.append(f"ctx {cc}{ctx_pct:.0f}%{RESET}")
 
-    g_pair = f"{_render_slot(slots[0], tier)} {_render_slot(slots[1], tier)}"
-    c_pair = f"{_render_slot(slots[2], tier)} {_render_slot(slots[3], tier)}"
+    g_pair = f"{_render_slot(slots[0], tier, lang)} {_render_slot(slots[1], tier, lang)}"
+    c_pair = f"{_render_slot(slots[2], tier, lang)} {_render_slot(slots[3], tier, lang)}"
     parts.append(g_pair)
     parts.append(c_pair)
 
     if running_subs > 0 and tier <= 2:
-        parts.append(f"{MAGENTA}子:{running_subs}{RESET}")
+        parts.append(f"{MAGENTA}{loc['sub']}{running_subs}{RESET}")
 
     return sep.join(parts)
 
 
 def render(payload: Dict[str, Any]) -> str:
+    lang = resolve_cli_lang(payload.get("lang"))
+    loc = STATUS_L10N.get(lang, STATUS_L10N["zh-CN"])
     width = int(payload.get("terminal_width") or 120)
     right_margin = max(16, int(os.environ.get("AGY_STATUSLINE_RIGHT_MARGIN", "22")))
     budget = max(0, width - right_margin)
@@ -338,26 +402,18 @@ def render(payload: Dict[str, Any]) -> str:
     cur_u = ctx.get("current_usage") or {}
     ctx_tok = int(cur_u.get("input_tokens") or 0) + int(cur_u.get("cache_read_input_tokens") or 0)
 
-    slots = extract_four_slots(payload)
+    slots = extract_four_slots(payload, lang=lang)
     subagents = payload.get("subagents") or []
     running_subs = sum(1 for s in subagents if isinstance(s, dict) and s.get("status") == "running")
 
     for tier in range(5):
-        line = _render_candidate(icon, model_seg, ctx_pct, ctx_tok, slots, running_subs, tier)
+        line = _render_candidate(icon, model_seg, ctx_pct, ctx_tok, slots, running_subs, tier, lang=lang)
         if display_width(line) <= budget:
             return line
 
     # Ultra-narrow fallback: always obey >=16 right margin; clear CYAN hint (no whole-line DIM)
     fallback_budget = budget if budget >= 1 else max(0, width - 16)
-    hints = [
-        f"{icon} {CYAN}窗口过窄，完整四桶已用请看网页 (agy-usage){RESET}",
-        f"{icon} {CYAN}窗口过窄，完整四桶请看网页 agy-usage{RESET}",
-        f"{icon} {CYAN}窗口过窄，请看网页 agy-usage{RESET}",
-        f"{icon} {CYAN}看网页:agy-usage{RESET}",
-        f"{icon} {CYAN}看网页{RESET}",
-        f"{icon} {CYAN}网页{RESET}",
-        icon,
-    ]
+    hints = [f"{icon} {CYAN}{txt}{RESET}" for txt in loc["narrow"]] + [icon]
     for cand in hints:
         if display_width(cand) <= fallback_budget:
             return cand
@@ -372,7 +428,8 @@ def main() -> int:
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         raw = sys.stdin.read()
         if not raw.strip():
-            print(f"{DIM}agy-usage: 等待状态数据...{RESET}")
+            loc = STATUS_L10N.get(resolve_cli_lang(), STATUS_L10N["zh-CN"])
+            print(f"{DIM}{loc['wait']}{RESET}")
             return 0
         payload = json.loads(raw)
         if not isinstance(payload, dict):

@@ -9,6 +9,7 @@ named mutex single-instance guard, dynamic widget sizing, and thread-safe shutdo
 from __future__ import annotations
 
 import json
+import locale
 import os
 import subprocess
 import sys
@@ -23,7 +24,15 @@ API_URL = f"http://127.0.0.1:{PORT}/api/stats?window=7d"
 PREF_URL = f"http://127.0.0.1:{PORT}/api/preferences"
 WEB_URL = f"http://127.0.0.1:{PORT}"
 CLI_PATH = Path(__file__).resolve().parent.parent / "src" / "cli.py"
-THEME_FILE = Path.home() / ".cache" / "agy-usage" / "ui-theme"
+def _cache_dir() -> Path:
+    if os.name == "nt":
+        base = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData/Local"))
+        return base / "agy-usage"
+    return Path.home() / ".cache" / "agy-usage"
+
+
+THEME_FILE = _cache_dir() / "ui-theme"
+LANG_FILE = _cache_dir() / "ui-lang"
 THEMES = {
     "dark": {
         "bg": "#1e293b",
@@ -111,6 +120,49 @@ def _resolved_theme(pref: str) -> str:
     if pref in ("light", "tongtou", "dark"):
         return pref
     return "light" if _windows_system_is_light() else "dark"
+
+
+def _read_lang_pref() -> str:
+    try:
+        v = LANG_FILE.read_text(encoding="utf-8").strip()
+        if v in ("auto", "zh-CN", "zh-TW", "en"):
+            return v
+    except Exception:
+        pass
+    return "auto"
+
+
+def _write_lang_pref(value: str) -> None:
+    try:
+        LANG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        LANG_FILE.write_text(value, encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _resolved_lang(pref: str) -> str:
+    if pref in ("zh-CN", "zh-TW", "en"):
+        return pref
+    raw = (os.environ.get("AGY_USAGE_LANG") or "").lower()
+    if not raw:
+        try:
+            loc = locale.getlocale()[0] or ""
+            raw = str(loc).lower()
+        except Exception:
+            raw = ""
+    if "tw" in raw or "hk" in raw or "hant" in raw:
+        return "zh-TW"
+    if raw.startswith("zh") or "chinese" in raw:
+        return "zh-CN"
+    return "en"
+
+
+def _wtr(lang: str, cn: str, tw: str, en: str) -> str:
+    if lang == "zh-CN":
+        return cn
+    if lang == "zh-TW":
+        return tw
+    return en
 
 
 def _val_color(used_pct: float, expired: bool, pal: Dict[str, str]) -> str:
@@ -241,6 +293,7 @@ def main() -> int:
         "drag_x": 0,
         "drag_y": 0,
         "theme_pref": _read_theme_pref(),
+        "lang_pref": _read_lang_pref(),
         "last_data": None,
     }
 
@@ -425,19 +478,36 @@ def main() -> int:
         if state.get("last_data") is not None:
             apply_data(state["last_data"])
 
-    ctx_menu = tk.Menu(root, tearoff=0)
-    ctx_menu.add_command(label="展开 / 收起详情 (双击)", command=toggle_expand)
-    ctx_menu.add_command(label="打开完整 Web 监控台", command=open_web)
-    ctx_menu.add_command(label="开启/关闭 80% 额度桌面提醒", command=toggle_notifications)
-    ctx_menu.add_command(label="重置胶囊到右下角", command=reset_position)
-    ctx_menu.add_separator()
-    ctx_menu.add_command(label="外观 · 浅色", command=lambda: set_theme_pref("light"))
-    ctx_menu.add_command(label="外观 · 通透", command=lambda: set_theme_pref("tongtou"))
-    ctx_menu.add_command(label="外观 · 深色", command=lambda: set_theme_pref("dark"))
-    ctx_menu.add_command(label="外观 · 跟随系统", command=lambda: set_theme_pref("system"))
-    ctx_menu.add_separator()
-    ctx_menu.add_command(label="退出悬浮小工具", command=quit_widget)
+    def set_lang_pref(pref: str) -> None:
+        state["lang_pref"] = pref
+        _write_lang_pref(pref)
+        lg = _resolved_lang(pref)
+        open_dash_btn.configure(text=_wtr(lg, "打开完整监控台", "開啟完整監控台", "Open Web Dashboard"))
+        quit_btn.configure(text=_wtr(lg, "退出小工具", "結束小工具", "Quit"))
+        apply_data(state.get("last_data"))
 
+    ctx_menu = tk.Menu(root, tearoff=0)
+    ctx_menu.add_command(label="Expand / Collapse (双击展开)", command=toggle_expand)
+    ctx_menu.add_command(label="Open Web Dashboard (打开监控台)", command=open_web)
+    ctx_menu.add_command(label="Toggle 80% Alerts (额度提醒开关)", command=toggle_notifications)
+    ctx_menu.add_command(label="Reset Position (重置位置)", command=reset_position)
+    ctx_menu.add_separator()
+    ctx_menu.add_command(label="Theme · Light / 浅色", command=lambda: set_theme_pref("light"))
+    ctx_menu.add_command(label="Theme · Airy / 通透", command=lambda: set_theme_pref("tongtou"))
+    ctx_menu.add_command(label="Theme · Dark / 深色", command=lambda: set_theme_pref("dark"))
+    ctx_menu.add_command(label="Theme · Auto / 跟随系统", command=lambda: set_theme_pref("system"))
+    ctx_menu.add_separator()
+    ctx_menu.add_command(label="Language · Auto", command=lambda: set_lang_pref("auto"))
+    ctx_menu.add_command(label="Language · 简体中文", command=lambda: set_lang_pref("zh-CN"))
+    ctx_menu.add_command(label="Language · 繁體中文", command=lambda: set_lang_pref("zh-TW"))
+    ctx_menu.add_command(label="Language · English", command=lambda: set_lang_pref("en"))
+    ctx_menu.add_separator()
+    ctx_menu.add_command(label="Quit / 退出悬浮小工具", command=quit_widget)
+
+    init_lg = _resolved_lang(state["lang_pref"])
+    open_dash_btn.configure(text=_wtr(init_lg, "打开完整监控台", "開啟完整監控台", "Open Web Dashboard"))
+    quit_btn.configure(text=_wtr(init_lg, "退出小工具", "結束小工具", "Quit"))
+    summary_lbl.configure(text=_wtr(init_lg, "AGY 连接中...", "AGY 連線中...", "AGY Connecting..."))
     apply_chrome()
 
     def show_menu(evt: Any) -> None:
@@ -463,11 +533,12 @@ def main() -> int:
             return
         state["last_data"] = d
         pal = THEMES[_resolved_theme(state["theme_pref"])]
+        lg = _resolved_lang(state["lang_pref"])
         try:
             if not d:
                 dot_lbl.configure(fg=pal["warn"])
-                _show_plain_summary("AGY 离线 (双击)")
-                _set_detail_segments([[("本地服务未响应，点击下方按钮启动。", "muted")]])
+                _show_plain_summary(_wtr(lg, "AGY 离线 (双击)", "AGY 離線 (雙擊)", "AGY Offline"))
+                _set_detail_segments([[(_wtr(lg, "本地服务未响应，点击下方按钮启动。", "本機服務未回應，點擊下方按鈕啟動。", "Local service offline. Click below to start."), "muted")]])
                 clamp_and_place(target_x=root.winfo_x(), target_y=root.winfo_y())
                 return
 
@@ -518,27 +589,26 @@ def main() -> int:
                     exp = bool(b.get("reset_passed"))
                     is_cld = b.get("pool_key") == "claude_gpt"
                     pool = "Claude" if is_cld else "Gemini"
-                    win = "5h" if b.get("window_kind") == "five_hour" else "周"
-                    rst = "待刷新" if exp else (b.get("reset_time_cst") or "-")
+                    win = "5h" if b.get("window_kind") == "five_hour" else _wtr(lg, "周", "週", "Wk")
+                    rst = _wtr(lg, "待刷新", "待更新", "Refresh") if exp else (b.get("reset_time_cst") or "-")
                     val_tag = "expired" if exp else ("crit" if u >= 80.0 else ("warn" if u >= 55.0 else "ok"))
+                    used_w = _wtr(lg, "已用", "已用", "Used ")
                     rows.append([
                         (f"{pool}{win:<2} ", "cld" if is_cld else "gem"),
-                        (f"{ascii_bar(u)} 已用{u:5.1f}%", val_tag),
+                        (f"{ascii_bar(u)} {used_w}{u:5.1f}%", val_tag),
                         (f" ({rst})", "muted"),
                     ])
             else:
                 wt = (d.get("windows") or {}).get("today") or {}
                 dot_lbl.configure(fg=pal["ok"])
-                _show_plain_summary(f"AGY 今日 {fmt_tok(wt.get('billable_tokens', 0))}")
-                rows.append([("等待新开的 Antigravity 会话推送实时额度", "muted")])
+                _show_plain_summary(f"AGY {_wtr(lg, '今日', '今日', 'Today')} {fmt_tok(wt.get('billable_tokens', 0))}")
+                rows.append([(_wtr(lg, "等待新开的 Antigravity 会话推送实时额度", "等待新開的 Antigravity 對話推送即時額度", "Waiting for new Antigravity chat to push quota"), "muted")])
 
             w7 = (d.get("windows") or {}).get("7d") or {}
-            wow = (d.get("week_over_week") or {}).get("badge_text") or ""
-            wow_s = f" · {wow}" if wow else ""
-            ntf_s = "开" if state["notify_on"] else "关"
+            ntf_s = _wtr(lg, "开" if state["notify_on"] else "关", "開" if state["notify_on"] else "關", "On" if state["notify_on"] else "Off")
             rows.append([("-" * 38, "muted")])
-            rows.append([(f"近7日有效: {fmt_tok(w7.get('billable_tokens', 0))}{wow_s}", "fg")])
-            rows.append([(f"提醒:{ntf_s} · 双击收起 · 拖动移动 · 右键菜单", "muted")])
+            rows.append([(f"{_wtr(lg, '近7日有效', '近7日有效', 'Last 7d')}: {fmt_tok(w7.get('billable_tokens', 0))}", "fg")])
+            rows.append([(_wtr(lg, f"提醒:{ntf_s} · 双击收起 · 拖动移动 · 右键菜单", f"提醒:{ntf_s} · 雙擊收起 · 拖動移動 · 右鍵選單", f"Alerts:{ntf_s} · Double-click · Drag · Right-click"), "muted")])
             _set_detail_segments(rows)
             clamp_and_place(target_x=root.winfo_x(), target_y=root.winfo_y())
         except Exception:

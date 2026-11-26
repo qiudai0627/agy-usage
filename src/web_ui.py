@@ -160,6 +160,76 @@ _DASHBOARD_TEMPLATE = r"""<!DOCTYPE html>
   .btn:hover { border-color: var(--border-strong); }
   .btn.primary { background: #2563eb; border-color: transparent; color: #fff; }
   .btn.live-on { border-color: rgba(16, 185, 129, 0.4); color: var(--green); }
+
+  /* Raycast/Linear Rotating Conic Beam + Duolingo Living Vector Flame CTA */
+  @property --beam-angle {
+    syntax: '<angle>';
+    initial-value: 0deg;
+    inherits: false;
+  }
+  @keyframes spin-beam { to { --beam-angle: 360deg; } }
+  @keyframes flame-dance {
+    0%   { transform: scale(1, 0.96) rotate(-3deg); filter: drop-shadow(0 0 4px rgba(255,85,0,0.65)); }
+    50%  { transform: scale(1.08, 1.12) rotate(2.5deg); filter: drop-shadow(0 0 9px rgba(255,140,0,0.95)); }
+    100% { transform: scale(0.98, 1.05) rotate(-1.5deg); filter: drop-shadow(0 0 6px rgba(255,60,40,0.80)); }
+  }
+  @keyframes ember-rise {
+    0%   { transform: translateY(0) scale(1); opacity: 0.95; }
+    100% { transform: translateY(-7px) scale(0.3); opacity: 0; }
+  }
+  @keyframes cta-shimmer {
+    0%, 62% { transform: translateX(-140%) skewX(-22deg); }
+    100%    { transform: translateX(260%) skewX(-22deg); }
+  }
+  .fire-cta {
+    position: relative; border: 0; padding: 2px; border-radius: 999px; cursor: pointer;
+    display: inline-flex; align-items: center; vertical-align: middle;
+    background: conic-gradient(from var(--beam-angle), #ff2d55, #ff7a00, #ffd60a, #ff375f, #a855f7, #ff2d55);
+    animation: spin-beam 2.8s linear infinite;
+    box-shadow: 0 4px 16px rgba(255, 90, 31, 0.34), 0 0 0 1px rgba(255, 122, 0, 0.18);
+    transition: transform .16s cubic-bezier(.2,.9,.3,1.2), box-shadow .16s ease;
+  }
+  .fire-cta:hover {
+    transform: translateY(-1.5px) scale(1.03);
+    box-shadow: 0 7px 24px rgba(255, 75, 31, 0.52), 0 0 14px rgba(255, 168, 0, 0.38);
+  }
+  .fire-cta:active { transform: translateY(0.5px) scale(0.99); }
+  .fire-cta-in {
+    position: relative; overflow: hidden; border-radius: 999px;
+    padding: 4.5px 13px 4.5px 10px; display: inline-flex; align-items: center; gap: 6px;
+    background: linear-gradient(135deg, #1a1025 0%, #2b1222 52%, #331810 100%);
+    color: #fff7ed; font-size: 12px; font-weight: 750; letter-spacing: 0.15px; white-space: nowrap;
+  }
+  :root[data-theme="tongtou"] .fire-cta-in {
+    background: linear-gradient(135deg, #2b211d 0%, #3d241c 55%, #4a2c1d 100%);
+  }
+  :root[data-theme="light"] .fire-cta-in {
+    background: linear-gradient(135deg, #be185d 0%, #e11d48 48%, #ea580c 100%);
+  }
+  .fire-cta-in::after {
+    content: ""; position: absolute; top: 0; bottom: 0; width: 42%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.32), transparent);
+    animation: cta-shimmer 3.4s ease-in-out infinite; pointer-events: none;
+  }
+  .fire-svg {
+    width: 16px; height: 16px; flex-shrink: 0; overflow: visible;
+    transform-origin: 50% 86%;
+    animation: flame-dance 0.95s ease-in-out infinite alternate;
+  }
+  .fire-cta:hover .fire-svg { animation-duration: 0.55s; transform: scale(1.2); }
+  .fire-svg .eb1 { animation: ember-rise 1.2s ease-out infinite; }
+  .fire-svg .eb2 { animation: ember-rise 1.2s ease-out 0.55s infinite; }
+  .fire-stat-hl {
+    color: #fde047; font-weight: 800; font-variant-numeric: tabular-nums;
+  }
+  :root[data-theme="light"] .fire-stat-hl { color: #fef08a; }
+  .spark-dot {
+    position: fixed; width: 6px; height: 6px; border-radius: 50%; pointer-events: none; z-index: 99999;
+    transition: transform .62s cubic-bezier(.15,.85,.35,1), opacity .62s ease-out;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fire-cta, .fire-cta-in::after, .fire-svg, .fire-svg .eb1, .fire-svg .eb2 { animation: none; }
+  }
   select.lang-sel {
     appearance: auto; padding-right: 6px; max-width: 132px; outline: none; font-family: inherit;
   }
@@ -349,7 +419,16 @@ _DASHBOARD_TEMPLATE = r"""<!DOCTYPE html>
     width: min(410px, 92vw); background: var(--panel-solid); border: 1px solid var(--border);
     border-radius: 12px; padding: 16px; z-index: 960; display: none; box-shadow: 0 16px 48px rgba(0,0,0,0.5);
   }
+  .modal.modal-wide { width: min(740px, 95vw); border-radius: 16px; padding: 16px 18px; }
   .modal.open { display: block; }
+  .sc-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+  .sc-preview-wrap {
+    background: var(--chip-bg); border: 1px solid var(--border); border-radius: 12px;
+    padding: 10px; display: grid; place-items: center; margin-bottom: 12px;
+  }
+  #sc-canvas { width: 100%; max-width: 680px; height: auto; border-radius: 12px; display: block; box-shadow: 0 10px 28px rgba(0,0,0,0.18); }
+  .sc-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+  .sc-chk { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text); cursor: pointer; user-select: none; }
   .field { margin-bottom: 10px; }
   .field label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; font-weight: 600; }
   .field input, .field select {
@@ -499,10 +578,43 @@ _DASHBOARD_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 </div>
 
+<!-- Viral Share Card Modal -->
+<div class="modal modal-wide" id="share-modal">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;">
+    <div style="font-size:13.5px;font-weight:700;color:var(--text-strong);" data-i18n="sc_title">生成战报晒单卡（自动脱敏 · 不含任何路径与会话名）</div>
+    <button class="btn" data-action="close" data-i18n="dr_close">关闭 ✕</button>
+  </div>
+  <div class="sc-toolbar">
+    <div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;">
+      <div class="pills" id="sc-win-pills">
+        <button class="pill active" type="button" data-sc-win="7d" data-i18n="w_7d">近7天</button>
+        <button class="pill" type="button" data-sc-win="today" data-i18n="w_today">今日</button>
+        <button class="pill" type="button" data-sc-win="all" data-i18n="w_all">全部</button>
+      </div>
+      <div class="pills" id="sc-theme-pills">
+        <button class="pill active" type="button" data-sc-theme="tongtou" data-i18n="th_tongtou">通透</button>
+        <button class="pill" type="button" data-sc-theme="light" data-i18n="th_light">浅色</button>
+        <button class="pill" type="button" data-sc-theme="dark" data-i18n="th_dark">深色</button>
+      </div>
+    </div>
+    <label class="sc-chk"><input type="checkbox" id="sc-usd-chk" checked /> <span data-i18n="sc_show_usd">显示估算节省金额 ($)</span></label>
+  </div>
+  <div class="sc-preview-wrap">
+    <canvas id="sc-canvas" width="1560" height="990"></canvas>
+  </div>
+  <div class="sc-actions">
+    <button class="btn" type="button" id="sc-copy-post-btn" data-i18n="sc_copy_post">📝 复制推荐文案+安装口令</button>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="btn" type="button" id="sc-dl-btn" data-i18n="sc_dl_png">⬇️ 下载高清 PNG</button>
+      <button class="btn primary" type="button" id="sc-copy-img-btn" data-i18n="sc_copy_img">📋 复制战报图片</button>
+    </div>
+  </div>
+</div>
+
 <div class="wrap">
   <header>
     <div class="brand">
-      <img class="logo" src="__LOGO_DATA_URI__" alt="AGY Usage" width="32" height="32" />
+      <img class="logo" id="brand-logo-img" src="__LOGO_DATA_URI__" alt="AGY Usage" width="32" height="32" />
       <div>
         <h1 data-i18n="h1">Antigravity 实时额度与用量监控台</h1>
         <div class="sub"><span class="dot ok"></span><span id="subtitle" data-i18n="syncing">正在同步本地遥测数据...</span></div>
@@ -517,6 +629,18 @@ _DASHBOARD_TEMPLATE = r"""<!DOCTYPE html>
         <button class="pill active" data-win="7d" data-i18n="w_7d">近7天</button>
         <button class="pill" data-win="all" data-i18n="w_all">全部</button>
       </div>
+      <button class="fire-cta" type="button" id="share-btn" data-open-share="1">
+        <span class="fire-cta-in">
+          <svg class="fire-svg" viewBox="0 0 24 24" aria-hidden="true">
+            <circle class="eb1" cx="9" cy="4" r="1.4" fill="#fde047"/>
+            <circle class="eb2" cx="15.5" cy="5" r="1.1" fill="#fb923c"/>
+            <path d="M12.4 2.2c.4 3.2-1.9 4.9-2.8 6.8-.9 1.9-.3 3.6 1.1 4.2-.3-1.5.5-2.8 1.9-3.6 1.2 1.8 1.7 3.7.9 5.5 1.8-.6 2.9-2.4 2.8-4.5 2.1 1.7 3.1 4.5 2.1 7.2-1.1 2.9-3.9 4.6-6.8 4.6-3.4 0-6.2-2.3-6.7-5.6-.5-3.4 1.5-6.6 4.4-8.9-.2 1.5.4 2.6 1.4 3.1-.5-3.1 1.7-6.3 1.7-8.8z" fill="#ff4d00"/>
+            <path d="M12.1 7.6c.7 1.9-.6 3.3-1.3 4.7-.7 1.4-.3 3.1 1.1 3.9-.2-1 .3-2 1.2-2.5.8 1.2.9 2.7.2 3.9 1.6-.5 2.5-2.2 1.9-4.1-.5-1.7-1.9-3.2-3.1-5.9z" fill="#ffb703"/>
+            <path d="M11.8 13.2c.5 1.2-.2 2.2-.5 3.1-.3.9.2 2 1.2 2.3.9.2 1.9-.5 2-1.5.2-1.2-.9-2.3-2.7-3.9z" fill="#fffbeb"/>
+          </svg>
+          <span id="hdr-share-lbl" data-i18n="sc_btn">生成晒单战报卡</span>
+        </span>
+      </button>
       <button class="btn live-on" id="live-btn"><span class="dot ok"></span><span id="live-btn-lbl" data-i18n="live_on">实时 3s</span></button>
       <button class="btn" id="notify-btn" data-i18n-title="ntf_tip" title="开启或关闭 80%/95% 额度提醒与回血桌面通知">🔔 提醒: 关</button>
       <button class="btn" id="open-modal-btn" data-i18n="add_quota">＋录入限额</button>
@@ -892,6 +1016,11 @@ document.addEventListener('click', evt => {
     openSession(sessEl.getAttribute('data-session'));
     return;
   }
+  if (evt.target.closest('[data-open-share]')) {
+    burstSparks(evt.clientX, evt.clientY);
+    openShareModal();
+    return;
+  }
   if (evt.target.closest('[data-action="close"]') || evt.target.id === 'backdrop') {
     closeOverlays();
   }
@@ -907,9 +1036,35 @@ setInterval(() => {
   });
 }, 1000);
 
+function flameIconSvg() {
+  return `<svg class="fire-svg" viewBox="0 0 24 24" aria-hidden="true"><circle class="eb1" cx="9" cy="4" r="1.4" fill="#fde047"/><circle class="eb2" cx="15.5" cy="5" r="1.1" fill="#fb923c"/><path d="M12.4 2.2c.4 3.2-1.9 4.9-2.8 6.8-.9 1.9-.3 3.6 1.1 4.2-.3-1.5.5-2.8 1.9-3.6 1.2 1.8 1.7 3.7.9 5.5 1.8-.6 2.9-2.4 2.8-4.5 2.1 1.7 3.1 4.5 2.1 7.2-1.1 2.9-3.9 4.6-6.8 4.6-3.4 0-6.2-2.3-6.7-5.6-.5-3.4 1.5-6.6 4.4-8.9-.2 1.5.4 2.6 1.4 3.1-.5-3.1 1.7-6.3 1.7-8.8z" fill="#ff4d00"/><path d="M12.1 7.6c.7 1.9-.6 3.3-1.3 4.7-.7 1.4-.3 3.1 1.1 3.9-.2-1 .3-2 1.2-2.5.8 1.2.9 2.7.2 3.9 1.6-.5 2.5-2.2 1.9-4.1-.5-1.7-1.9-3.2-3.1-5.9z" fill="#ffb703"/><path d="M11.8 13.2c.5 1.2-.2 2.2-.5 3.1-.3.9.2 2 1.2 2.3.9.2 1.9-.5 2-1.5.2-1.2-.9-2.3-2.7-3.9z" fill="#fffbeb"/></svg>`;
+}
+
+function burstSparks(cx, cy) {
+  if (!cx && !cy) return;
+  const cols = ['#ff4d00', '#ffb703', '#fde047', '#ff2d55', '#a855f7', '#38bdf8'];
+  for (let i = 0; i < 14; i++) {
+    const d = document.createElement('div');
+    d.className = 'spark-dot';
+    d.style.background = cols[i % cols.length];
+    d.style.left = (cx - 3) + 'px';
+    d.style.top = (cy - 3) + 'px';
+    d.style.boxShadow = '0 0 8px ' + cols[i % cols.length];
+    document.body.appendChild(d);
+    const ang = (Math.PI * 2 * i) / 14 + (Math.random() - 0.5) * 0.35;
+    const dist = 26 + Math.random() * 36;
+    requestAnimationFrame(() => {
+      d.style.transform = `translate(${Math.cos(ang) * dist}px, ${Math.sin(ang) * dist - 8}px) scale(0.2)`;
+      d.style.opacity = '0';
+    });
+    setTimeout(() => d.remove(), 660);
+  }
+}
+
 function renderBanner(data) {
   const ls = data.live_session || {};
   const q = data.quota || {};
+  const sel = data.selected_summary || {};
   const ctx = ls.context_window;
   let ctxHtml = `<span class="v" style="color:var(--muted)">${esc(tr('st_pending'))}</span>`;
   if (ctx && ctx.used_percentage != null) {
@@ -924,6 +1079,10 @@ function renderBanner(data) {
         : `<span class="dot err"></span>${esc(tr('st_not_linked'))}`);
   const slCmd = '/statusline ' + (ls.statusline_path || 'statusline.py');
   const slDisp = '/statusline ' + (ls.statusline_display_path || ls.statusline_path || 'statusline.py');
+  const cleanBtnTxt = String(tr('sc_btn')).replace(/^📸\s*/, '');
+  const heroHook = (sel.total_tokens || 0) > 0
+    ? `<span class="fire-stat-hl">${esc(fmtTok(sel.total_tokens))}${sel.cache_saved_usd >= 1 ? ' · ' + esc(fmtUsd(sel.cache_saved_usd)) : ''}</span> ▸ ${esc(cleanBtnTxt)}`
+    : esc(cleanBtnTxt);
 
   document.getElementById('live-banner').innerHTML = `
     <div class="strip-left">
@@ -934,7 +1093,10 @@ function renderBanner(data) {
       ${ls.plan_tier && ls.plan_tier !== '-' ? `<div class="kv"><span class="badge">${esc(ls.plan_tier)}</span></div>` : ''}
       ${q.has_live_quota ? `<div class="kv"><span class="k">${esc(tr('st_samples'))}</span><span class="v">${esc(tr('st_samples_val', q.snapshot_count))}</span></div>` : ''}
     </div>
-    <span class="code-chip" title="${esc(tr('click_copy'))}" data-copy="${esc(slCmd)}">${esc(slDisp)}</span>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      ${!q.has_live_quota ? `<span class="code-chip" title="${esc(tr('click_copy'))}" data-copy="${esc(slCmd)}">${esc(slDisp)}</span>` : ''}
+      <button class="fire-cta" type="button" data-open-share="1"><span class="fire-cta-in">${flameIconSvg()}<span>${heroHook}</span></span></button>
+    </div>
   `;
 }
 
@@ -1485,6 +1647,7 @@ function closeOverlays() {
   document.getElementById('backdrop').classList.remove('open');
   document.getElementById('session-drawer').classList.remove('open');
   document.getElementById('quota-modal').classList.remove('open');
+  document.getElementById('share-modal').classList.remove('open');
 }
 
 function renderAll(data) {
@@ -1614,6 +1777,310 @@ document.getElementById('open-modal-btn').addEventListener('click', () => {
 
 document.getElementById('export-btn').addEventListener('click', () => {
   window.location.href = '/api/export.csv?window=' + encodeURIComponent(currentWin);
+});
+
+// ==================== Viral Share Card Renderer (Zero-Dependency 2x Canvas) ====================
+let scWin = '7d';
+let scTheme = 'tongtou';
+
+function scRoundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function drawShareCard() {
+  if (!lastData) return;
+  const cv = document.getElementById('sc-canvas');
+  if (!cv) return;
+  const ctx = cv.getContext('2d');
+  const S = 2;
+  const W = 780, H = 495;
+  cv.width = W * S;
+  cv.height = H * S;
+  ctx.save();
+  ctx.scale(S, S);
+
+  const showUsd = document.getElementById('sc-usd-chk').checked;
+  const wins = lastData.windows || {};
+  const wObj = wins[scWin] || lastData.selected_summary || {};
+  const q = lastData.quota || {};
+  const buckets = q.buckets || [];
+  const ls = lastData.live_session || {};
+  const wow = lastData.week_over_week || {};
+
+  const PALS = {
+    tongtou: {
+      bg0: '#F7F3EE', bg1: '#EFE8E0', glowA: 'rgba(123,167,167,0.22)', glowB: 'rgba(196,168,130,0.20)',
+      border: '#DFD7CE', text: '#2C3E50', muted: '#6E6A64', card: 'rgba(255,253,251,0.88)', cardBd: '#E5DED5',
+      badgeBg: 'rgba(77,124,124,0.13)', badgeFg: '#356262', pillBg: 'rgba(5,150,105,0.12)', pillFg: '#047857',
+      gem: '#4D7C7C', cld: '#9A7B4F', track: '#E8E2DB', ok: '#059669', warn: '#D97706', crit: '#DC2626',
+      footBg: '#FFFDFB', footBd: '#E6DFD6', urlBg: '#F2ECE5', urlFg: '#3D6B6B',
+    },
+    light: {
+      bg0: '#FFF8FB', bg1: '#F3ECFF', glowA: 'rgba(244,114,182,0.24)', glowB: 'rgba(167,139,250,0.24)',
+      border: '#FBCFE8', text: '#3A2430', muted: '#745664', card: 'rgba(255,255,255,0.80)', cardBd: '#FBCFE8',
+      badgeBg: 'rgba(219,39,119,0.11)', badgeFg: '#BE185D', pillBg: 'rgba(124,58,237,0.11)', pillFg: '#6D28D9',
+      gem: '#0E7490', cld: '#6D28D9', track: '#FCE7F3', ok: '#059669', warn: '#D97706', crit: '#DC2626',
+      footBg: '#FFFFFF', footBd: '#FBCFE8', urlBg: '#FDF2F8', urlFg: '#9D174D',
+    },
+    dark: {
+      bg0: '#1E293B', bg1: '#0F172A', glowA: 'rgba(56,189,248,0.18)', glowB: 'rgba(167,139,250,0.18)',
+      border: '#334155', text: '#F8FAFC', muted: '#94A3B8', card: 'rgba(30,41,59,0.86)', cardBd: '#334155',
+      badgeBg: 'rgba(56,189,248,0.15)', badgeFg: '#38BDF8', pillBg: 'rgba(16,185,129,0.16)', pillFg: '#34D399',
+      gem: '#38BDF8', cld: '#C084FC', track: '#334155', ok: '#34D399', warn: '#FBBF24', crit: '#F87171',
+      footBg: '#0F172A', footBd: '#334155', urlBg: '#1E293B', urlFg: '#38BDF8',
+    },
+  };
+  const P = PALS[scTheme] || PALS.tongtou;
+  const ff = '-apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", sans-serif';
+
+  // Background & Soft Aurora Glows
+  scRoundRect(ctx, 0, 0, W, H, 24);
+  ctx.clip();
+  const bgG = ctx.createLinearGradient(0, 0, W, H);
+  bgG.addColorStop(0, P.bg0);
+  bgG.addColorStop(1, P.bg1);
+  ctx.fillStyle = bgG;
+  ctx.fillRect(0, 0, W, H);
+
+  const g1 = ctx.createRadialGradient(90, 20, 10, 90, 20, 340);
+  g1.addColorStop(0, P.glowA); g1.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g1; ctx.fillRect(0, 0, W, H);
+
+  const g2 = ctx.createRadialGradient(W - 80, 60, 10, W - 80, 60, 320);
+  g2.addColorStop(0, P.glowB); g2.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g2; ctx.fillRect(0, 0, W, H);
+
+  // Determine Dynamic Fun Rank Badge
+  const gemW = buckets.find(b => String(b.pool_key || '').startsWith('gemini') && b.window_kind === 'weekly') || buckets[0];
+  const cldW = buckets.find(b => b.pool_key === 'claude_gpt' && b.window_kind === 'weekly') || buckets[1];
+  const totTok = Number(wObj.total_tokens || 0);
+  const hitPct = Number(wObj.cache_hit_pct || 0);
+  let rankTxt = tr('sc_rank_zen');
+  if (buckets.some(b => b.used_pct != null && b.used_pct >= 80 && !b.reset_passed)) rankTxt = tr('sc_rank_edge');
+  else if (totTok >= 1e8 && hitPct >= 85) rankTxt = tr('sc_rank_save');
+  else if ((gemW && gemW.used_pct != null && gemW.used_pct <= 5) || (cldW && cldW.used_pct != null && cldW.used_pct <= 5)) rankTxt = tr('sc_rank_reset');
+  else if (totTok >= 3e7) rankTxt = tr('sc_rank_power');
+
+  // Top Row: Rank Pill + Window/Tier
+  ctx.font = '700 13px ' + ff;
+  const bw = ctx.measureText(rankTxt).width + 26;
+  scRoundRect(ctx, 32, 28, bw, 30, 15);
+  ctx.fillStyle = P.badgeBg; ctx.fill();
+  ctx.fillStyle = P.badgeFg; ctx.fillText(rankTxt, 45, 48);
+
+  const tierBit = (ls.plan_tier && ls.plan_tier !== '-') ? (' · ' + ls.plan_tier) : '';
+  const dateStr = tr('sc_win_lbl', winName(scWin)) + tierBit;
+  ctx.font = '600 12.5px ' + ff;
+  ctx.fillStyle = P.muted;
+  ctx.textAlign = 'right';
+  ctx.fillText(dateStr, W - 32, 48);
+  ctx.textAlign = 'left';
+
+  // Hero Big Token Number + Savings / Hit Pill
+  ctx.font = '600 13px ' + ff;
+  ctx.fillStyle = P.muted;
+  ctx.fillText(tr('sc_kicker'), 32, 86);
+
+  const tokStr = fmtTok(totTok);
+  ctx.font = '800 50px ' + ff;
+  ctx.fillStyle = P.text;
+  ctx.fillText(tokStr, 32, 138);
+  const tokW = ctx.measureText(tokStr).width;
+
+  const pillStr = showUsd
+    ? tr('sc_save_pill', hitPct.toFixed(1), fmtUsd(wObj.cache_saved_usd || 0))
+    : tr('sc_hit_pill', hitPct.toFixed(1));
+  ctx.font = '700 14px ' + ff;
+  const pw = ctx.measureText(pillStr).width + 24;
+  const px = Math.min(W - pw - 32, 32 + tokW + 16);
+  scRoundRect(ctx, px, 108, pw, 32, 9);
+  ctx.fillStyle = P.pillBg; ctx.fill();
+  ctx.fillStyle = P.pillFg; ctx.fillText(pillStr, px + 12, 129);
+
+  // Dual Pool Cards
+  function drawPoolBox(bx, by, boxW, boxH, title, accentCol, bkt) {
+    scRoundRect(ctx, bx, by, boxW, boxH, 16);
+    ctx.fillStyle = P.card; ctx.fill();
+    ctx.strokeStyle = P.cardBd; ctx.lineWidth = 1; ctx.stroke();
+
+    ctx.font = '700 13px ' + ff;
+    ctx.fillStyle = accentCol;
+    ctx.fillText(title, bx + 18, by + 28);
+
+    const hasU = bkt && bkt.used_pct != null;
+    const u = hasU ? Number(bkt.used_pct) : 0;
+    const exp = !!(bkt && bkt.reset_passed);
+    const vCol = !hasU ? P.muted : (exp ? P.muted : (u >= 80 ? P.crit : (u >= 55 ? P.warn : P.ok)));
+    const stWord = !hasU ? tr('st_pending') : (exp ? tr('b_ready') : (u >= 80 ? tr('b_crit') : (u >= 55 ? tr('b_warn') : tr('b_ok'))));
+
+    ctx.textAlign = 'right';
+    ctx.font = '700 12px ' + ff;
+    ctx.fillStyle = vCol;
+    ctx.fillText(stWord, bx + boxW - 18, by + 28);
+    ctx.textAlign = 'left';
+
+    const valMain = hasU ? (tr('used_lbl') + ' ' + u.toFixed(1) + '%') : '—';
+    ctx.font = '800 24px ' + ff;
+    ctx.fillStyle = vCol;
+    ctx.fillText(valMain, bx + 18, by + 64);
+
+    const rstSub = !hasU ? '' : (exp ? tr('expired_wait') : (bkt.reset_in_seconds != null ? tr('rem_time', fmtCountdown(bkt.reset_in_seconds)) : (bkt.reset_time_cst || '')));
+    ctx.textAlign = 'right';
+    ctx.font = '600 11.5px ' + ff;
+    ctx.fillStyle = P.muted;
+    ctx.fillText(rstSub, bx + boxW - 18, by + 63);
+    ctx.textAlign = 'left';
+
+    scRoundRect(ctx, bx + 18, by + 80, boxW - 36, 8, 4);
+    ctx.fillStyle = P.track; ctx.fill();
+    if (hasU && u > 0) {
+      const fw = Math.max(8, Math.min(boxW - 36, ((boxW - 36) * u) / 100));
+      scRoundRect(ctx, bx + 18, by + 80, fw, 8, 4);
+      ctx.fillStyle = vCol; ctx.fill();
+    }
+  }
+
+  const boxW = (W - 64 - 16) / 2;
+  drawPoolBox(32, 162, boxW, 106, tr('sc_gem_lbl'), P.gem, gemW);
+  drawPoolBox(32 + boxW + 16, 162, boxW, 106, tr('sc_cld_lbl'), P.cld, cldW);
+
+  // 3 Mini KPIs Row
+  const kpis = [
+    { k: tr('th_calls'), v: tr('n_calls', wObj.calls || 0), c: P.text },
+    showUsd && wow && wow.comparable && scWin === '7d'
+      ? { k: tr('kpi_7d_t'), v: (wow.delta_pct <= 0 ? '↓ ' : '↑ ') + Math.abs(wow.delta_pct).toFixed(1) + '% vs last wk', c: wow.delta_pct <= 0 ? P.ok : P.warn }
+      : { k: tr('sc_net_tok'), v: fmtTok(wObj.billable_tokens || 0) + ' tok', c: P.text },
+    { k: tr('st_model'), v: String(ls.active_model || '-').replace(' (High)', '').slice(0, 22), c: P.text },
+  ];
+  const kw = (W - 64) / 3;
+  kpis.forEach((it, idx) => {
+    const kx = 32 + idx * kw;
+    ctx.font = '600 11.5px ' + ff;
+    ctx.fillStyle = P.muted;
+    ctx.fillText(it.k, kx, 304);
+    ctx.font = '750 16.5px ' + ff;
+    ctx.fillStyle = it.c;
+    ctx.fillText(it.v, kx, 328);
+  });
+
+  // Leica-Style Watermark Footer
+  const fy = H - 76;
+  ctx.fillStyle = P.footBg;
+  ctx.fillRect(0, fy, W, 76);
+  ctx.strokeStyle = P.footBd;
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, fy); ctx.lineTo(W, fy); ctx.stroke();
+
+  const logoImg = document.getElementById('brand-logo-img');
+  if (logoImg) {
+    if (logoImg.complete && logoImg.naturalWidth > 0) {
+      ctx.save();
+      scRoundRect(ctx, 32, fy + 19, 38, 38, 9);
+      ctx.clip();
+      ctx.drawImage(logoImg, 32, fy + 19, 38, 38);
+      ctx.restore();
+    } else {
+      logoImg.addEventListener('load', drawShareCard, { once: true });
+    }
+  }
+
+  ctx.font = '800 14px ' + ff;
+  ctx.fillStyle = P.text;
+  ctx.fillText(tr('h1'), 82, fy + 35);
+  ctx.font = '500 11px ' + ff;
+  ctx.fillStyle = P.muted;
+  ctx.fillText(tr('sc_tag_sub'), 82, fy + 53);
+
+  const repoUrl = 'github.com/qiudai0627/agy-usage';
+  ctx.font = '700 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+  const uw = ctx.measureText(repoUrl).width + 22;
+  scRoundRect(ctx, W - 32 - uw, fy + 23, uw, 30, 8);
+  ctx.fillStyle = P.urlBg; ctx.fill();
+  ctx.fillStyle = P.urlFg;
+  ctx.fillText(repoUrl, W - 32 - uw + 11, fy + 42);
+
+  // Outer Card Rim
+  scRoundRect(ctx, 0.75, 0.75, W - 1.5, H - 1.5, 24);
+  ctx.strokeStyle = P.border;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+function syncSharePills() {
+  document.querySelectorAll('#sc-win-pills .pill').forEach(b => b.classList.toggle('active', b.getAttribute('data-sc-win') === scWin));
+  document.querySelectorAll('#sc-theme-pills .pill').forEach(b => b.classList.toggle('active', b.getAttribute('data-sc-theme') === scTheme));
+}
+
+function openShareModal() {
+  scTheme = resolvedTheme(prefTheme());
+  scWin = (currentWin === 'today' || currentWin === 'all') ? currentWin : '7d';
+  syncSharePills();
+  document.getElementById('backdrop').classList.add('open');
+  document.getElementById('share-modal').classList.add('open');
+  drawShareCard();
+}
+
+document.getElementById('sc-win-pills').addEventListener('click', e => {
+  const b = e.target.closest('[data-sc-win]');
+  if (!b) return;
+  scWin = b.getAttribute('data-sc-win');
+  syncSharePills();
+  drawShareCard();
+});
+
+document.getElementById('sc-theme-pills').addEventListener('click', e => {
+  const b = e.target.closest('[data-sc-theme]');
+  if (!b) return;
+  scTheme = b.getAttribute('data-sc-theme');
+  syncSharePills();
+  drawShareCard();
+});
+
+document.getElementById('sc-usd-chk').addEventListener('change', drawShareCard);
+
+document.getElementById('sc-dl-btn').addEventListener('click', () => {
+  const cv = document.getElementById('sc-canvas');
+  const a = document.createElement('a');
+  a.download = 'agy-usage-card-' + scWin + '.png';
+  a.href = cv.toDataURL('image/png');
+  a.click();
+});
+
+document.getElementById('sc-copy-img-btn').addEventListener('click', (evt) => {
+  burstSparks(evt.clientX, evt.clientY);
+  const cv = document.getElementById('sc-canvas');
+  const btn = document.getElementById('sc-copy-img-btn');
+  cv.toBlob(async blob => {
+    if (!blob) return;
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+      btn.textContent = tr('sc_copied_img');
+      setTimeout(() => { btn.textContent = tr('sc_copy_img'); }, 1800);
+    } catch (_) {
+      const a = document.createElement('a');
+      a.download = 'agy-usage-card-' + scWin + '.png';
+      a.href = URL.createObjectURL(blob);
+      a.click();
+    }
+  }, 'image/png');
+});
+
+document.getElementById('sc-copy-post-btn').addEventListener('click', async () => {
+  if (!lastData) return;
+  const wObj = (lastData.windows || {})[scWin] || lastData.selected_summary || {};
+  const postTxt = tr('sc_post_tpl', winName(scWin), fmtTok(wObj.total_tokens || 0), Number(wObj.cache_hit_pct || 0).toFixed(1));
+  if (navigator.clipboard) await navigator.clipboard.writeText(postTxt);
+  const btn = document.getElementById('sc-copy-post-btn');
+  btn.textContent = tr('sc_copied_post');
+  setTimeout(() => { btn.textContent = tr('sc_copy_post'); }, 1800);
 });
 
 document.getElementById('theme-pills').addEventListener('click', (e) => {

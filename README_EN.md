@@ -11,7 +11,7 @@ This lightweight utility reads usage records **strictly on your own computer** a
 
 ![Light · Airy · Dark 3 Built-in Color Themes](./docs/assets/themes-3way.svg)
 
-- **Local Web Dashboard**: Side-by-side rings & pace bars for both **Gemini** and **Claude/GPT** pools, with Light / Airy / Dark themes and 11-language instant switching.
+- **Local Web Dashboard**: Side-by-side rings & pace bars for both **Gemini** and **Claude/GPT** pools, with Light / Airy / Dark themes, 11-language instant switching, and a **📸 1-click privacy-safe Share Card**.
 - **Floating Desktop Pill**: Sits cleanly below the top-right menu bar on Mac (never hidden behind the MacBook camera notch) or above the bottom-right taskbar on Windows.
 - **Terminal Bottom Bar**: Stays compact under your chat without repeating the model name or colliding with right-corner update popups.
 
@@ -34,7 +34,11 @@ This lightweight utility reads usage records **strictly on your own computer** a
   ```bash
   curl -fsSL https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.sh | bash
   ```
-- **Option B (No command line)**: Download the zip from [Releases](https://github.com/qiudai0627/agy-usage/releases), unzip it, right-click **`Start-Mac.command`**, and click **Open**.
+- **Option B (Homebrew CLI)**:
+  ```bash
+  brew install qiudai0627/tap/agy-usage
+  ```
+- **Option C (No command line)**: Download the zip from [Releases](https://github.com/qiudai0627/agy-usage/releases), unzip it, right-click **`Start-Mac.command`**, and click **Open**.
 
 **On Windows:**
 - **Option A (Recommended — paste into PowerShell and press Enter)**:

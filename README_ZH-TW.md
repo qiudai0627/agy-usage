@@ -11,7 +11,7 @@
 
 ![淺色 · 通透 · 深色 三套主題一鍵切換](./docs/assets/themes-3way.svg)
 
-- **網頁監控台**：左右並排看清 Gemini 與 Claude/GPT 兩套池子的「已用 %」和恢復時間（支援淺色/通透/深色主題與 11 國語言）。
+- **網頁監控台**：左右並排看清 Gemini 與 Claude/GPT 兩套池子的「已用 %」和恢復時間（支援淺色/通透/深色主題、11 國語言與 **📸 一鍵去識別化戰報曬單卡**）。
 - **桌面小膠囊**：Mac 停在右上角（不怕瀏海擋住），Windows 停在右下角，寫程式時餘光就能瞄一眼。
 - **終端機底部進度條**：不遮擋對話，跟著你的每次提問自動更新。
 
@@ -34,7 +34,11 @@
   ```bash
   curl -fsSL https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.sh | bash
   ```
-- **方法二（不想敲指令）**：去 [Releases 下載壓縮包](https://github.com/qiudai0627/agy-usage/releases) 解壓縮，右鍵點擊 **`Start-Mac.command`** 選擇「**打開**」。
+- **方法二（Homebrew 安裝 CLI）**：
+  ```bash
+  brew install qiudai0627/tap/agy-usage
+  ```
+- **方法三（不想敲指令）**：去 [Releases 下載壓縮包](https://github.com/qiudai0627/agy-usage/releases) 解壓縮，右鍵點擊 **`Start-Mac.command`** 選擇「**打開**」。
 
 **如果你用 Windows：**
 - **方法一（推薦，打開 PowerShell 貼上並按 Enter）**：

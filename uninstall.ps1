@@ -1,4 +1,4 @@
-﻿﻿$ErrorActionPreference = "Continue"
+﻿$ErrorActionPreference = "Continue"
 
 $RootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $SrcDir = Join-Path $RootDir "src"

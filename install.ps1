@@ -1,4 +1,4 @@
-﻿﻿$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 # 支持两种模式：
 # 1. 本地目录执行：.\install.ps1 或双击 Start-Windows.bat

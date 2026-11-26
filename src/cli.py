@@ -10,6 +10,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 import webbrowser
 from datetime import datetime
@@ -24,6 +25,7 @@ if str(APP_DIR) not in sys.path:
 
 from core import (  # noqa: E402
     DATA_DIR,
+    append_web_log,
     atomic_write_text,
     build_analytics,
     clean_cache,
@@ -515,14 +517,39 @@ def _read_pid() -> Optional[int]:
         return None
 
 
+class LockedLogStream:
+    """Thread- and process-safe log stream sharing .weblog.lock with rotate_web_log."""
+
+    def __init__(self) -> None:
+        self._tlock = threading.Lock()
+
+    def write(self, data: str) -> int:
+        if not data:
+            return 0
+        with self._tlock:
+            append_web_log(data)
+        return len(data)
+
+    def flush(self) -> None:
+        return
+
+
 class ReusableHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
 
 def cmd_web(args: argparse.Namespace) -> int:
+    if getattr(args, "daemon_log", False):
+        stream = LockedLogStream()
+        sys.stdout = stream  # type: ignore[assignment]
+        sys.stderr = stream  # type: ignore[assignment]
     host = "127.0.0.1"
     port = int(args.port)
-    server = ReusableHTTPServer((host, port), make_handler(port))
+    try:
+        server = ReusableHTTPServer((host, port), make_handler(port))
+    except Exception as exc:
+        print(f"启动 Web 监控台失败 (127.0.0.1:{port}): {exc}", file=sys.stderr, flush=True)
+        return 1
     url = f"http://{host}:{port}"
     print(f"{GREEN}●{RESET} Antigravity 实时用量监控台已启动: {BOLD}{CYAN}{url}{RESET}", flush=True)
     print(f"  {DIM}仅监听本机 127.0.0.1 · 按 Ctrl+C 停止服务{RESET}", flush=True)
@@ -576,9 +603,8 @@ def cmd_daemon(args: argparse.Namespace) -> int:
             PID_FILE.unlink(missing_ok=True)
 
         rotate_web_log()
-        log_fh = LOG_FILE.open("ab")
         py_exe = sys.executable
-        popen_kwargs: Dict[str, Any] = {"stdout": log_fh, "stderr": log_fh}
+        popen_kwargs: Dict[str, Any] = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
         if os.name == "nt":
             pyw = Path(py_exe).with_name("pythonw.exe")
             if pyw.exists():
@@ -588,10 +614,9 @@ def cmd_daemon(args: argparse.Namespace) -> int:
             popen_kwargs["start_new_session"] = True
 
         proc = subprocess.Popen(
-            [py_exe, str(APP_DIR / "cli.py"), "web", "--port", str(port), "--no-open"],
+            [py_exe, str(APP_DIR / "cli.py"), "web", "--port", str(port), "--no-open", "--daemon-log"],
             **popen_kwargs,
         )
-        log_fh.close()
         PID_FILE.write_text(str(proc.pid), encoding="utf-8")
         time.sleep(0.5)
         if proc.poll() is not None:
@@ -785,7 +810,7 @@ def cmd_notify(args: argparse.Namespace) -> int:
 def cmd_record_quota(args: argparse.Namespace) -> int:
     try:
         res = save_manual_quota(args.bucket, args.remaining_pct, args.reset)
-    except ValueError as exc:
+    except (ValueError, TimeoutError) as exc:
         print(f"{RED}{exc}{RESET}", file=sys.stderr)
         return 1
     rem = res["remaining_pct"]
@@ -817,6 +842,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_web = sub.add_parser("web", help="前台启动本地实时 Web 可视化看板")
     p_web.add_argument("-p", "--port", type=int, default=18420, help="监听端口（默认 18420）")
     p_web.add_argument("--no-open", action="store_true", help="不自动打开浏览器")
+    p_web.add_argument("--daemon-log", action="store_true", help=argparse.SUPPRESS)
 
     p_d = sub.add_parser("daemon", help="后台常驻管理本地 Web 监控台 (start/stop/restart/status)")
     p_d.add_argument("action", choices=["start", "stop", "restart", "status"])

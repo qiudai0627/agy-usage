@@ -609,11 +609,12 @@ def load_transcript_events() -> List[Dict[str, Any]]:
 
     # O(1) disk persistence: only write changed session shards & unlink removed ones
     if updated_shards or stale_keys:
-        with file_lock(DATA_DIR / ".index.lock", timeout=1.5):
-            for path_str, mtime_ns, size, parsed in updated_shards:
-                _save_single_conv_cache(path_str, mtime_ns, size, parsed)
-            for k in stale_keys:
-                _remove_single_conv_cache(k)
+        with file_lock(DATA_DIR / ".index.lock", timeout=1.5) as locked:
+            if locked:
+                for path_str, mtime_ns, size, parsed in updated_shards:
+                    _save_single_conv_cache(path_str, mtime_ns, size, parsed)
+                for k in stale_keys:
+                    _remove_single_conv_cache(k)
 
     events.sort(key=lambda e: e["ts"])
     return events
@@ -977,7 +978,9 @@ def get_preferences() -> Dict[str, Any]:
 
 def set_preferences(notifications_enabled: Optional[bool] = None) -> Dict[str, Any]:
     ensure_data_dir()
-    with file_lock(PREFERENCES_FILE.with_name(".prefs.lock"), timeout=1.5):
+    with file_lock(PREFERENCES_FILE.with_name(".prefs.lock"), timeout=1.5) as locked:
+        if not locked:
+            raise TimeoutError("获取 preferences 锁超时，已放弃写入")
         prefs = get_preferences()
         if notifications_enabled is not None:
             prefs["notifications_enabled"] = bool(notifications_enabled)
@@ -1799,7 +1802,7 @@ def record_quota_snapshot(
     now_iso = now.isoformat()
 
     with file_lock(_snapshots_lock_path(), timeout=1.5) as locked:
-        if not locked and not force:
+        if not locked:
             return False
 
         should_append = force
@@ -1977,19 +1980,48 @@ def _compact_quota_snapshots_unlocked(keep_days: int = 30, keep_archive_days: in
     }
 
 
-def compact_quota_snapshots(keep_days: int = 30) -> Dict[str, int]:
-    """Thread/process-safe wrapper around snapshot compaction and daily archiving."""
+def compact_quota_snapshots(keep_days: int = 30) -> Dict[str, Any]:
+    """Thread/process-safe wrapper around snapshot compaction and daily archiving (fail-closed)."""
     ensure_data_dir()
-    with file_lock(_snapshots_lock_path(), timeout=3.0):
+    with file_lock(_snapshots_lock_path(), timeout=3.0) as locked:
+        if not locked:
+            sz = SNAPSHOTS_FILE.stat().st_size if SNAPSHOTS_FILE.exists() else 0
+            return {
+                "before_lines": 0,
+                "after_lines": 0,
+                "archived_days": 0,
+                "bytes_before": sz,
+                "bytes_after": sz,
+                "skipped_locked": True,
+            }
         return _compact_quota_snapshots_unlocked(keep_days=keep_days)
 
 
-def rotate_web_log(max_bytes: int = 2 * 1024 * 1024, keep_bytes: int = 512 * 1024) -> int:
-    """In-place log rotation preserving the existing inode so active O_APPEND daemon fds never detach."""
+def append_web_log(data: bytes | str, timeout: float = 1.5) -> bool:
+    """Append log payload to WEB_LOG_FILE under the same .weblog.lock used by rotate_web_log."""
+    ensure_data_dir()
+    payload = data.encode("utf-8", errors="replace") if isinstance(data, str) else data
+    with file_lock(WEB_LOG_FILE.with_name(".weblog.lock"), timeout=timeout) as locked:
+        if not locked:
+            return False
+        with WEB_LOG_FILE.open("ab") as fh:
+            fh.write(payload)
+            fh.flush()
+        return True
+
+
+def rotate_web_log(
+    max_bytes: int = 2 * 1024 * 1024,
+    keep_bytes: int = 512 * 1024,
+    _after_read_hook: Optional[Any] = None,
+) -> int:
+    """In-place log rotation under .weblog.lock (shared with append_web_log / LockedLogStream)."""
     if not WEB_LOG_FILE.exists():
         return 0
     try:
-        with file_lock(WEB_LOG_FILE.with_name(".weblog.lock"), timeout=1.0):
+        with file_lock(WEB_LOG_FILE.with_name(".weblog.lock"), timeout=1.0) as locked:
+            if not locked:
+                return 0
             sz = WEB_LOG_FILE.stat().st_size
             if sz <= max_bytes:
                 return 0
@@ -1999,6 +2031,8 @@ def rotate_web_log(max_bytes: int = 2 * 1024 * 1024, keep_bytes: int = 512 * 102
                 nl = tail.find(b"\n")
                 if 0 <= nl < len(tail) - 1:
                     tail = tail[nl + 1 :]
+                if _after_read_hook is not None:
+                    _after_read_hook()
                 fh.seek(0)
                 fh.write(tail)
                 fh.truncate()
@@ -2344,30 +2378,35 @@ def save_manual_quota(bucket: str, remaining_pct: float, reset_str: Optional[str
         reset_iso = dt_utc.isoformat()
         reset_in_sec = max(0, int((dt_utc - datetime.now(timezone.utc)).total_seconds()))
 
-    existing_quota: Dict[str, Any] = {}
-    existing_state: Dict[str, Any] = {}
-    if LIVE_STATE_FILE.exists():
-        try:
-            old = json.loads(LIVE_STATE_FILE.read_text(encoding="utf-8"))
-            if isinstance(old, dict):
-                existing_state = old
-                if isinstance(old.get("quota"), dict):
-                    existing_quota = dict(old["quota"])
-        except Exception:
-            pass
+    with file_lock(LIVE_STATE_FILE.with_name(".state.lock"), timeout=1.5) as locked:
+        if not locked:
+            raise TimeoutError("获取状态文件锁超时，已放弃写入，请稍后重试")
 
-    entry: Dict[str, Any] = {"remaining_fraction": round(rem_pct / 100.0, 4)}
-    if reset_iso:
-        entry["reset_time"] = reset_iso
-    if reset_in_sec is not None:
-        entry["reset_in_seconds"] = reset_in_sec
-    existing_quota[bucket.strip()] = entry
+        existing_quota: Dict[str, Any] = {}
+        existing_state: Dict[str, Any] = {}
+        if LIVE_STATE_FILE.exists():
+            try:
+                old = json.loads(LIVE_STATE_FILE.read_text(encoding="utf-8"))
+                if isinstance(old, dict):
+                    existing_state = old
+                    if isinstance(old.get("quota"), dict):
+                        existing_quota = dict(old["quota"])
+            except Exception:
+                pass
 
-    record_quota_snapshot(existing_quota, source="manual", force=True)
-    state = {k: v for k, v in existing_state.items() if k != "email"}
-    state["captured_at"] = datetime.now(timezone.utc).isoformat()
-    state["source"] = "manual"
-    state["quota"] = existing_quota
-    with file_lock(LIVE_STATE_FILE.with_name(".state.lock"), timeout=1.5):
+        entry: Dict[str, Any] = {"remaining_fraction": round(rem_pct / 100.0, 4)}
+        if reset_iso:
+            entry["reset_time"] = reset_iso
+        if reset_in_sec is not None:
+            entry["reset_in_seconds"] = reset_in_sec
+        existing_quota[bucket.strip()] = entry
+
+        if not record_quota_snapshot(existing_quota, source="manual", force=True):
+            raise TimeoutError("获取限额快照锁超时，已放弃写入，请稍后重试")
+
+        state = {k: v for k, v in existing_state.items() if k != "email"}
+        state["captured_at"] = datetime.now(timezone.utc).isoformat()
+        state["source"] = "manual"
+        state["quota"] = existing_quota
         atomic_write_text(LIVE_STATE_FILE, json.dumps(state, ensure_ascii=False, indent=2))
     return {"ok": True, "bucket": bucket.strip(), "remaining_pct": rem_pct, "reset_time": reset_iso}

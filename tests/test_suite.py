@@ -74,9 +74,27 @@ for w in (80, 105, 120, 160):
     vis_w = statusline.display_width(out)
     assert vis_w <= w - 16, f"Width {vis_w} exceeded budget for w={w}: {clean!r}"
 
-# Ultra-narrow (< 60 cols) must prompt to view Web UI rather than silently dropping 2 buckets
-ultra = re.sub(r"\x1b\[[0-9;]*m", "", statusline.render(dict(payload, terminal_width=52)))
-assert "网页" in ultra and "agy-usage" in ultra, f"Ultra-narrow fallback unexpected: {ultra!r}"
+# Ultra-narrow widths (40, 52, 60) must ALWAYS obey >=16 right margin and show web prompt
+heavy = dict(
+    payload,
+    quota={
+        "gemini-5h": {"remaining_fraction": 0.2, "reset_time": fut_5h, "reset_in_seconds": 10800},
+        "gemini-weekly": {"remaining_fraction": 0.2, "reset_time": fut_w, "reset_in_seconds": 432000},
+        "3p-5h": {"remaining_fraction": 0.2, "reset_time": fut_5h, "reset_in_seconds": 10800},
+        "3p-weekly": {"remaining_fraction": 0.2, "reset_time": fut_w, "reset_in_seconds": 432000},
+    },
+)
+for w in (40, 52, 60):
+    out_u = statusline.render(dict(heavy, terminal_width=w))
+    clean_u = re.sub(r"\x1b\[[0-9;]*m", "", out_u)
+    vis_u = statusline.display_width(out_u)
+    assert vis_u <= w - 16, f"R2 margin violated at w={w}: vis={vis_u} > {w - 16} ({clean_u!r})"
+    assert "网页" in clean_u and "agy-usage" in clean_u, f"Missing web hint at w={w}: {clean_u!r}"
+
+# Extremely narrow (30 cols) still obeys >=16 right margin with short hint
+out_30 = statusline.render(dict(heavy, terminal_width=30))
+assert statusline.display_width(out_30) <= 30 - 16, out_30
+assert "网页" in re.sub(r"\x1b\[[0-9;]*m", "", out_30), out_30
 
 # Missing bucket must show placeholder, never fake 0%
 partial = dict(payload, terminal_width=120, quota={"gemini-weekly": {"remaining_fraction": 0.85, "reset_time": fut_w}})
@@ -201,6 +219,113 @@ assert not tmps, f"Leftover tmp files: {tmps}"
 print("CONCURRENCY_OK")
 """
         self.assertIn("CONCURRENCY_OK", _run_in_sandbox(code))
+
+    def test_r1_lock_timeout_multiprocess_zero_writes_and_concurrent_buckets(self) -> None:
+        """R1: Lock timeout across OS processes must fail closed (zero writes/compaction);
+        concurrent two-bucket manual updates must both persist without overwriting each other."""
+        code = r"""
+import json, os, subprocess, sys, time
+from pathlib import Path
+import core, statusline
+
+cache_dir = Path(os.environ["AGY_USAGE_DATA_DIR"])
+agy_dir = Path(os.environ["AGY_DATA_DIR"])
+
+def hold_lock_proc(lock_path: Path, hold_sec: float):
+    ready_file = cache_dir / f".ready_{lock_path.name}"
+    if ready_file.exists():
+        ready_file.unlink()
+    helper = (
+        "import time, pathlib, core\n"
+        f"with core.file_lock(pathlib.Path({str(lock_path)!r}), timeout=5.0) as ok:\n"
+        "    assert ok\n"
+        f"    pathlib.Path({str(ready_file)!r}).write_text('1')\n"
+        f"    time.sleep({hold_sec})\n"
+    )
+    proc = subprocess.Popen([sys.executable, "-c", helper], env=dict(os.environ))
+    for _ in range(100):
+        if ready_file.exists():
+            break
+        time.sleep(0.02)
+    assert ready_file.exists(), f"Lock holder did not acquire {lock_path}"
+    return proc
+
+# 1. Hold .snapshots.lock across OS process -> force=True record & compact must both fail closed (zero writes)
+seed_snap = (
+    json.dumps({"captured_at": "2026-11-25T10:00:00+00:00", "source": "manual", "quota": {"gemini-weekly": {"remaining_fraction": 0.9}}}) + "\n" +
+    json.dumps({"captured_at": "2026-11-25T10:01:00+00:00", "source": "manual", "quota": {"gemini-weekly": {"remaining_fraction": 0.9}}}) + "\n" +
+    json.dumps({"captured_at": "2026-11-25T10:02:00+00:00", "source": "manual", "quota": {"gemini-weekly": {"remaining_fraction": 0.9}}}) + "\n"
+)
+core.SNAPSHOTS_FILE.write_text(seed_snap, encoding="utf-8")
+snap_before = core.SNAPSHOTS_FILE.read_bytes()
+
+p_snap = hold_lock_proc(core.SNAPSHOTS_FILE.with_name(".snapshots.lock"), 5.2)
+try:
+    wrote = core.record_quota_snapshot({"gemini-weekly": {"remaining_fraction": 0.1}}, source="manual", force=True)
+    assert wrote is False, "force=True must NOT bypass lock timeout!"
+    assert core.SNAPSHOTS_FILE.read_bytes() == snap_before, "Snapshots file modified despite lock timeout!"
+
+    comp = core.compact_quota_snapshots(keep_days=30)
+    assert comp.get("skipped_locked") is True, comp
+    assert core.SNAPSHOTS_FILE.read_bytes() == snap_before, "Compact modified file despite lock timeout!"
+finally:
+    p_snap.terminate()
+    p_snap.wait(timeout=3)
+
+# 2. Hold .state.lock across OS process -> statusline.persist_state & save_manual_quota must do zero writes
+seed_state = json.dumps({"source": "seed", "quota": {"gemini-weekly": {"remaining_fraction": 0.8}}})
+core.LIVE_STATE_FILE.write_text(seed_state, encoding="utf-8")
+state_before = core.LIVE_STATE_FILE.read_bytes()
+
+p_state = hold_lock_proc(core.LIVE_STATE_FILE.with_name(".state.lock"), 3.2)
+try:
+    statusline.persist_state({"quota": {"gemini-weekly": {"remaining_fraction": 0.1}}})
+    assert core.LIVE_STATE_FILE.read_bytes() == state_before, "statusline wrote live_state despite lock timeout!"
+
+    failed_manual = False
+    try:
+        core.save_manual_quota("claude-weekly", 50.0)
+    except TimeoutError:
+        failed_manual = True
+    assert failed_manual, "save_manual_quota must raise TimeoutError when .state.lock is held!"
+    assert core.LIVE_STATE_FILE.read_bytes() == state_before, "save_manual_quota modified live_state despite lock timeout!"
+finally:
+    p_state.terminate()
+    p_state.wait(timeout=3)
+
+# 3. Hold .index.lock across OS process -> load_transcript_events must write ZERO shard files
+tdir = agy_dir / "brain/conv-locked/.system_generated/logs"
+tdir.mkdir(parents=True)
+(tdir / "transcript.jsonl").write_text(
+    json.dumps({"step_index": 1, "created_at": "2026-11-25T10:00:00Z", "model": "gemini-4-neon", "input_tokens": 100, "output_tokens": 10}) + "\n",
+    encoding="utf-8",
+)
+p_idx = hold_lock_proc(cache_dir / ".index.lock", 2.5)
+try:
+    evs = core.load_transcript_events()
+    assert len(evs) == 1
+    shards = list(core.CONV_CACHE_DIR.glob("*.json")) if core.CONV_CACHE_DIR.exists() else []
+    assert len(shards) == 0, f"Index shard written despite .index.lock held: {shards}"
+finally:
+    p_idx.terminate()
+    p_idx.wait(timeout=3)
+
+# 4. Two concurrent OS processes updating two DIFFERENT buckets via save_manual_quota -> both survive!
+core.LIVE_STATE_FILE.unlink(missing_ok=True)
+env = dict(os.environ)
+c1 = "import core; core.save_manual_quota('gemini-weekly', 80.0)"
+c2 = "import core; core.save_manual_quota('claude-weekly', 40.0)"
+proc1 = subprocess.Popen([sys.executable, "-c", c1], env=env)
+proc2 = subprocess.Popen([sys.executable, "-c", c2], env=env)
+assert proc1.wait(timeout=10) == 0
+assert proc2.wait(timeout=10) == 0
+merged = json.loads(core.LIVE_STATE_FILE.read_text(encoding="utf-8"))
+assert "gemini-weekly" in merged["quota"] and "claude-weekly" in merged["quota"], merged
+assert abs(merged["quota"]["gemini-weekly"]["remaining_fraction"] - 0.8) < 1e-4
+assert abs(merged["quota"]["claude-weekly"]["remaining_fraction"] - 0.4) < 1e-4
+print("R1_LOCK_MULTIPROC_OK")
+"""
+        self.assertIn("R1_LOCK_MULTIPROC_OK", _run_in_sandbox(code, {"AGY_USAGE_SUPPRESS_OS_NOTIFY": "1"}))
 
     def test_f13_http_host_origin_and_email_strip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -399,28 +524,86 @@ print(f"F06_OK elapsed_ms={elapsed_ms:.1f} written_bytes={written_bytes}")
 
     def test_f08_f09_weblog_inode_and_doctor_readonly_then_fix(self) -> None:
         code = r"""
-import json, os
+import json, os, subprocess, sys, threading, time
 from pathlib import Path
-import core
+import core, cli
 
-# 1. F08: Active O_APPEND fd keeps writing to the exact same inode after rotate_web_log
+# 1. F08 & R5: Concurrent locked append triggered by barrier right after rotate reads tail (before truncate)
+#    must wait for .weblog.lock, preserve the marker after rotation AND across a subsequent rotation.
 core.ensure_data_dir()
-append_fh = core.WEB_LOG_FILE.open("ab")
-try:
-    append_fh.write((b"X" * 99 + b"\n") * 7000)  # ~700 KB
-    append_fh.flush()
-    ino_before = core.WEB_LOG_FILE.stat().st_ino
-    freed = core.rotate_web_log(max_bytes=512 * 1024, keep_bytes=128 * 1024)
-    assert freed > 500 * 1024, freed
-    assert core.WEB_LOG_FILE.stat().st_ino == ino_before, "Inode changed during log rotation!"
-    append_fh.write(b"LIVE_FD_AFTER_ROTATE_OK\n")
-    append_fh.flush()
-finally:
-    append_fh.close()
+core.WEB_LOG_FILE.write_bytes((b"X" * 99 + b"\n") * 7000)  # ~700 KB
+ino_before = core.WEB_LOG_FILE.stat().st_ino
 
+read_tail_barrier = threading.Barrier(2, timeout=5)
+append_done = threading.Event()
+append_order = []
+
+def after_read_hook() -> None:
+    # Synchronize right after tail is read and BEFORE seek(0)/write/truncate
+    read_tail_barrier.wait()
+    # Give writer thread a moment to prove it blocks on .weblog.lock rather than slipping before truncate
+    time.sleep(0.08)
+    assert not append_done.is_set(), "Writer bypassed .weblog.lock during rotate!"
+    append_order.append("rotate_truncate")
+
+def concurrent_writer() -> None:
+    read_tail_barrier.wait()
+    stream = cli.LockedLogStream()
+    stream.write("MARKER_AFTER_READ_TAIL_OK\n")
+    append_order.append("writer_append")
+    append_done.set()
+
+t_writer = threading.Thread(target=concurrent_writer)
+t_writer.start()
+freed = core.rotate_web_log(
+    max_bytes=512 * 1024,
+    keep_bytes=128 * 1024,
+    _after_read_hook=after_read_hook,
+)
+t_writer.join(timeout=5)
+assert freed > 500 * 1024, freed
+assert append_done.is_set(), "Writer did not complete"
+assert append_order == ["rotate_truncate", "writer_append"], append_order
+assert core.WEB_LOG_FILE.stat().st_ino == ino_before, "Inode changed during log rotation!"
+assert core.WEB_LOG_FILE.read_text("utf-8").endswith("MARKER_AFTER_READ_TAIL_OK\n")
+
+# Run another rotation after appending more data -> marker stays visible in rotated tail
+assert core.append_web_log(b"SECOND_ROTATE_TAIL_MARKER\n") is True
+core.rotate_web_log(max_bytes=64 * 1024, keep_bytes=32 * 1024)
 tail_txt = core.WEB_LOG_FILE.read_text("utf-8")
-assert tail_txt.endswith("LIVE_FD_AFTER_ROTATE_OK\n"), tail_txt[-80:]
-assert core.WEB_LOG_FILE.stat().st_size < 160 * 1024
+assert "MARKER_AFTER_READ_TAIL_OK\n" in tail_txt and tail_txt.endswith("SECOND_ROTATE_TAIL_MARKER\n"), tail_txt[-120:]
+assert core.WEB_LOG_FILE.stat().st_size < 64 * 1024
+
+# Also verify fail-closed: if .weblog.lock is held by another OS process, rotate_web_log returns 0 & does not truncate
+big_bytes = (b"Y" * 99 + b"\n") * 7000
+core.WEB_LOG_FILE.write_bytes(big_bytes)
+lock_path = core.WEB_LOG_FILE.with_name(".weblog.lock")
+ready = core.DATA_DIR / ".ready_weblog"
+ready.unlink(missing_ok=True)
+p_wl = subprocess.Popen(
+    [
+        sys.executable, "-c",
+        (
+            "import time, pathlib, core\n"
+            f"with core.file_lock(pathlib.Path({str(lock_path)!r}), timeout=5.0) as ok:\n"
+            "    assert ok\n"
+            f"    pathlib.Path({str(ready)!r}).write_text('1')\n"
+            "    time.sleep(2.2)\n"
+        ),
+    ],
+    env=dict(os.environ),
+)
+try:
+    for _ in range(100):
+        if ready.exists():
+            break
+        time.sleep(0.02)
+    assert ready.exists()
+    assert core.rotate_web_log(max_bytes=512 * 1024, keep_bytes=128 * 1024) == 0
+    assert core.WEB_LOG_FILE.stat().st_size == len(big_bytes)
+finally:
+    p_wl.terminate()
+    p_wl.wait(timeout=3)
 
 # 2. F09 & doctor --fix: Read-only first, then repair corrupt lines + orphan tmp + missing statusLine
 core.DAILY_ARCHIVE_FILE.write_text(
@@ -558,8 +741,63 @@ print("CANDIDATE_B_TZ_OK")
         for ps_name in ("install.ps1", "uninstall.ps1"):
             raw = (ROOT_DIR / ps_name).read_bytes()
             self.assertTrue(raw.startswith(b"\xef\xbb\xbf"), f"{ps_name} must start with UTF-8 BOM")
+            self.assertFalse(raw[3:].startswith(b"\xef\xbb\xbf"), f"{ps_name} must have EXACTLY ONE UTF-8 BOM")
+            body = raw[3:].decode("utf-8")
+            self.assertNotIn("\ufeff", body, f"{ps_name} body must not contain U+FEFF")
+            self.assertTrue(body.startswith("$ErrorActionPreference"), f"{ps_name} must start with PowerShell code")
         bat = (ROOT_DIR / "Start-Windows.bat").read_bytes()
         self.assertFalse(bat.startswith(b"\xef\xbb\xbf"), "Start-Windows.bat must not start with UTF-8 BOM")
+        self.assertNotIn("\ufeff", bat.decode("utf-8"))
+
+    def test_r4_terminal_svg_buckets_left_of_reserved_zone(self) -> None:
+        import unicodedata
+        import xml.etree.ElementTree as ET
+
+        svg_path = ROOT_DIR / "docs" / "assets" / "terminal-bar.svg"
+        tree = ET.parse(svg_path)
+        root = tree.getroot()
+        ns = {"s": "http://www.w3.org/2000/svg"}
+
+        reserved_rect = None
+        for rect in root.findall("s:rect", ns):
+            if rect.attrib.get("stroke-dasharray"):
+                reserved_rect = rect
+                break
+        self.assertIsNotNone(reserved_rect, "Reserved zone rect not found in terminal-bar.svg")
+        reserved_x = float(reserved_rect.attrib["x"])
+
+        bucket_texts = []
+        row1_model_count = 0
+        row2_model_count = 0
+        for txt in root.findall("s:text", ns):
+            content = (txt.text or "").strip()
+            y = float(txt.attrib.get("y", "0"))
+            x = float(txt.attrib.get("x", "0"))
+            fs = float(txt.attrib.get("font-size", "11"))
+            if "Gemini 4 Carbon" in content:
+                if y < 80:
+                    row1_model_count += 1
+                else:
+                    row2_model_count += 1
+            if any(k in content for k in ("Gemini5h", "Gemini周", "Claude5h", "Claude周")):
+                # Conservative monospace px estimate: CJK/block = 1.05*fs, ASCII = 0.65*fs
+                est_px = 0.0
+                for ch in content:
+                    if unicodedata.east_asian_width(ch) in ("W", "F") or ch in "█░":
+                        est_px += fs * 1.05
+                    else:
+                        est_px += fs * 0.65
+                bucket_texts.append((content, x, x + est_px))
+
+        self.assertEqual(row1_model_count, 1, "Model name must appear once on native Row 1")
+        self.assertEqual(row2_model_count, 0, "Model name must NOT repeat on Row 2")
+        self.assertEqual(len(bucket_texts), 4, f"Expected 4 bucket text nodes: {bucket_texts}")
+        for content, x, right_edge in bucket_texts:
+            self.assertLess(
+                right_edge,
+                reserved_x - 16.0,
+                f"Bucket {content!r} (x={x}, est_right={right_edge:.1f}) encroaches reserved zone x={reserved_x}",
+            )
 
 
 if __name__ == "__main__":

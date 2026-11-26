@@ -25,8 +25,13 @@ assert not re.search(r'onclick="\$\{', html), "Unsafe template interpolation ins
 for ps_name in ("install.ps1", "uninstall.ps1"):
     b = (root / ps_name).read_bytes()
     assert b.startswith(b"\xef\xbb\xbf"), f"{ps_name} must start with UTF-8 BOM for Windows PowerShell 5.1"
+    assert not b[3:].startswith(b"\xef\xbb\xbf"), f"{ps_name} must have EXACTLY ONE UTF-8 BOM (found duplicate BOM)"
+    body = b[3:].decode("utf-8")
+    assert "\ufeff" not in body, f"{ps_name} body must not contain extra U+FEFF"
+    assert body.startswith("$ErrorActionPreference"), f"{ps_name} body must start directly with PowerShell code"
 bat_b = (root / "Start-Windows.bat").read_bytes()
 assert not bat_b.startswith(b"\xef\xbb\xbf"), "Start-Windows.bat must NOT start with UTF-8 BOM"
+assert "\ufeff" not in bat_b.decode("utf-8"), "Start-Windows.bat must NOT contain U+FEFF"
 print("✓ HTML/SVG 安全与 Windows PowerShell/BAT 编码检查通过")
 PY
 

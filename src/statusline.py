@@ -141,8 +141,12 @@ def persist_state(payload: Dict[str, Any]) -> None:
         state["captured_at"] = now_iso
         state["source"] = "statusline"
 
-        with file_lock(LIVE_STATE_FILE.with_name(".state.lock"), timeout=0.4):
-            atomic_write_text(LIVE_STATE_FILE, json.dumps(state, ensure_ascii=False))
+        with file_lock(LIVE_STATE_FILE.with_name(".state.lock"), timeout=0.4) as locked:
+            if not locked:
+                if os.environ.get("AGY_USAGE_DEBUG"):
+                    sys.stderr.write("agy-usage persist warning: state lock timeout, skipped live_state write\n")
+            else:
+                atomic_write_text(LIVE_STATE_FILE, json.dumps(state, ensure_ascii=False))
 
         quota = payload.get("quota")
         if isinstance(quota, dict) and quota:
@@ -318,8 +322,8 @@ def _render_candidate(
 
 def render(payload: Dict[str, Any]) -> str:
     width = int(payload.get("terminal_width") or 120)
-    right_margin = int(os.environ.get("AGY_STATUSLINE_RIGHT_MARGIN", "22"))
-    budget = max(16, width - max(16, right_margin))
+    right_margin = max(16, int(os.environ.get("AGY_STATUSLINE_RIGHT_MARGIN", "22")))
+    budget = max(0, width - right_margin)
 
     state = str(payload.get("agent_state") or "idle").lower()
     icon = STATE_ICONS.get(state, f"{DIM}•{RESET}")
@@ -341,11 +345,21 @@ def render(payload: Dict[str, Any]) -> str:
         if display_width(line) <= budget:
             return line
 
-    # Ultra-narrow fallback: never silently drop buckets; prompt user to view Web UI
-    hint = f"{icon} {DIM}窗口过窄，完整四桶已用请看网页 (agy-usage){RESET}"
-    if display_width(hint) <= max(20, width - 8):
-        return hint
-    return f"{icon} {DIM}看网页:agy-usage{RESET}"
+    # Ultra-narrow fallback: always obey >=16 right margin; step down hint length to fit budget
+    fallback_budget = budget if budget >= 1 else max(0, width - 16)
+    hints = [
+        f"{icon} {DIM}窗口过窄，完整四桶已用请看网页 (agy-usage){RESET}",
+        f"{icon} {DIM}窗口过窄，完整四桶请看网页 agy-usage{RESET}",
+        f"{icon} {DIM}窗口过窄，请看网页 agy-usage{RESET}",
+        f"{icon} {DIM}看网页:agy-usage{RESET}",
+        f"{icon} {DIM}看网页{RESET}",
+        f"{icon} {DIM}网页{RESET}",
+        icon,
+    ]
+    for cand in hints:
+        if display_width(cand) <= fallback_budget:
+            return cand
+    return ""
 
 
 def main() -> int:

@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 240" width="640" height="240">
+  <rect width="640" height="240" rx="12" fill="#0b1220" stroke="#24324d"/>
+  <!-- Expanded Colored Windows Widget above taskbar -->
+  <rect x="316" y="18" width="304" height="176" rx="8" fill="#1e293b" stroke="#38bdf8" stroke-width="1.2"/>
+  <text x="332" y="40" fill="#fbbf24" font-family="sans-serif" font-size="12" font-weight="700">●</text>
+  <text x="348" y="40" font-family="monospace" font-size="11.5" font-weight="700"><tspan fill="#38bdf8">G </tspan><tspan fill="#34d399">15%</tspan><tspan fill="#64748b"> │ </tspan><tspan fill="#a78bfa">C </tspan><tspan fill="#fbbf24">62%</tspan></text>
+  <text x="604" y="40" text-anchor="end" fill="#38bdf8" font-family="sans-serif" font-size="12" font-weight="700">↗</text>
+  <line x1="328" y1="50" x2="608" y2="50" stroke="#334155"/>
+  <text x="332" y="70" font-family="monospace" font-size="10.5"><tspan fill="#38bdf8" font-weight="700">Gemini5h </tspan><tspan fill="#34d399">██░░░░░░ Used 18.0%</tspan><tspan fill="#94a3b8"> (20:00)</tspan></text>
+  <text x="332" y="88" font-family="monospace" font-size="10.5"><tspan fill="#38bdf8" font-weight="700">Gemini7d </tspan><tspan fill="#34d399">█░░░░░░░ Used 15.0%</tspan><tspan fill="#94a3b8"> (12-01)</tspan></text>
+  <text x="332" y="106" font-family="monospace" font-size="10.5"><tspan fill="#a78bfa" font-weight="700">Claude5h </tspan><tspan fill="#34d399">██░░░░░░ Used 24.0%</tspan><tspan fill="#94a3b8"> (19:25)</tspan></text>
+  <text x="332" y="124" font-family="monospace" font-size="10.5"><tspan fill="#a78bfa" font-weight="700">Claude7d </tspan><tspan fill="#fbbf24">█████░░░ Used 62.0%</tspan><tspan fill="#94a3b8"> (11-30)</tspan></text>
+  <line x1="328" y1="136" x2="608" y2="136" stroke="#334155"/>
+  <text x="332" y="153" fill="#94a3b8" font-family="sans-serif" font-size="10.5">7d Billable: 12.6M tok · Double-click mini</text>
+  <rect x="332" y="163" width="142" height="22" rx="5" fill="#2563eb"/>
+  <text x="403" y="178" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10.5" font-weight="600">Open Web Dashboard</text>
+
+  <!-- Simulated Windows Taskbar -->
+  <rect x="0" y="206" width="640" height="34" fill="#141c2e"/>
+  <text x="622" y="227" text-anchor="end" fill="#cbd5e1" font-family="sans-serif" font-size="10.5">ENG  🔊  🌐  14:30</text>
+
+  <!-- Left callout -->
+  <text x="24" y="64" fill="#f8fafc" font-family="sans-serif" font-size="13" font-weight="700">Windows Taskbar Mini Pill</text>
+  <text x="24" y="88" fill="#94a3b8" font-family="sans-serif" font-size="11">• G / C pool colors · 55% warn / 80% crit</text>
+  <text x="24" y="108" fill="#94a3b8" font-family="sans-serif" font-size="11">• Right-click Light / Airy / Dark / System</text>
+  <text x="24" y="128" fill="#94a3b8" font-family="sans-serif" font-size="11">• Sits above taskbar · Zero dependencies</text>
+</svg>

@@ -7,9 +7,9 @@
 When coding in Google Antigravity, your **5-hour window** and **weekly quota** can quietly run low—and by the time you hit a rate limit mid-task, it's already disruptive.  
 This lightweight utility reads usage records **strictly on your own computer** and turns them into clear progress bars and reset countdowns. **No account passwords required, zero cloud uploads, zero third-party packages** (cost figures shown in the UI are reference estimates based on public API list prices, not official billing).
 
-![4-Bucket Quota Monitor Overview (Airy Theme)](./docs/assets/overview-4buckets.svg)
+![4-Bucket Quota Monitor Overview (Airy Theme)](./docs/assets/overview-4buckets-en.svg)
 
-![Light · Airy · Dark 3 Built-in Color Themes](./docs/assets/themes-3way.svg)
+![Light · Airy · Dark 3 Built-in Color Themes](./docs/assets/themes-3way-en.svg)
 
 - **Local Web Dashboard**: Side-by-side rings & pace bars for both **Gemini** and **Claude/GPT** pools, with Light / Airy / Dark themes, 11-language instant switching, and a **📸 1-click privacy-safe Share Card**.
 - **Floating Desktop Pill**: Sits cleanly below the top-right menu bar on Mac (never hidden behind the MacBook camera notch) or above the bottom-right taskbar on Windows.
@@ -57,11 +57,11 @@ Once installed, three views are ready (use whichever you prefer):
 
 | macOS Notch-Safe Floating Pill | Windows Taskbar Mini Pill |
 | :---: | :---: |
-| ![macOS Floating Pill](./docs/assets/macos-pill.svg) | ![Windows Floating Pill](./docs/assets/windows-pill.svg) |
+| ![macOS Floating Pill](./docs/assets/macos-pill-en.svg) | ![Windows Floating Pill](./docs/assets/windows-pill-en.svg) |
 
 3. **Bottom of Antigravity Terminal**: A clean 4-bucket color bar showing `Used %` for every pool:
 
-![Terminal Bottom Quota Bar](./docs/assets/terminal-bar.svg)
+![Terminal Bottom Quota Bar](./docs/assets/terminal-bar-en.svg)
 
 ---
 
@@ -69,7 +69,7 @@ Once installed, three views are ready (use whichever you prefer):
 
 **Open a new Antigravity window and send any message** (or paste the one-line activation command printed at the end of installation into an already-open chat). Within seconds, all 4 quota bars and reset countdowns light up.
 
-![From Waiting State to Live Percentages](./docs/assets/empty-to-active.svg)
+![From Waiting State to Live Percentages](./docs/assets/empty-to-active-en.svg)
 
 ---
 

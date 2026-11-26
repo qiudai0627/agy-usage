@@ -38,11 +38,17 @@ done
 ASSET_FILES=(
   logo.png
   overview-4buckets.svg
+  overview-4buckets-en.svg
   themes-3way.svg
+  themes-3way-en.svg
   macos-pill.svg
+  macos-pill-en.svg
   windows-pill.svg
+  windows-pill-en.svg
   terminal-bar.svg
+  terminal-bar-en.svg
   empty-to-active.svg
+  empty-to-active-en.svg
 )
 for f in "${ASSET_FILES[@]}"; do
   cp "$ROOT_DIR/docs/assets/$f" "$PKG_DIR/docs/assets/$f"

@@ -188,6 +188,34 @@ def compact_model_label(model_obj: Dict[str, Any]) -> str:
     return s[:18]
 
 
+def _valid_reset_dt(entry: Any) -> Optional[datetime]:
+    if not isinstance(entry, dict):
+        return None
+    dt = parse_iso_dt(entry.get("reset_time"))
+    if dt is None or dt.year <= 1971:
+        return None
+    return dt
+
+
+def _merge_freshest_quota(new_q: Dict[str, Any], prev_q: Dict[str, Any]) -> Dict[str, Any]:
+    """Prevent stale in-memory quota from idle background windows rolling back a newer reset cycle."""
+    merged: Dict[str, Any] = dict(prev_q)
+    for bid, cand in new_q.items():
+        if not isinstance(cand, dict):
+            continue
+        old = prev_q.get(bid)
+        if not isinstance(old, dict):
+            merged[bid] = cand
+            continue
+        cand_dt = _valid_reset_dt(cand)
+        old_dt = _valid_reset_dt(old)
+        if old_dt is not None and (cand_dt is None or cand_dt < old_dt - timedelta(seconds=60)):
+            merged[bid] = old
+        else:
+            merged[bid] = cand
+    return merged
+
+
 def persist_state(payload: Dict[str, Any]) -> None:
     try:
         ensure_data_dir()
@@ -195,20 +223,30 @@ def persist_state(payload: Dict[str, Any]) -> None:
         state = {k: v for k, v in payload.items() if k != "email"}
         state["captured_at"] = now_iso
         state["source"] = "statusline"
+        merged_quota: Optional[Dict[str, Any]] = payload.get("quota") if isinstance(payload.get("quota"), dict) else None
 
         with file_lock(LIVE_STATE_FILE.with_name(".state.lock"), timeout=0.4) as locked:
             if not locked:
                 if os.environ.get("AGY_USAGE_DEBUG"):
                     sys.stderr.write("agy-usage persist warning: state lock timeout, skipped live_state write\n")
             else:
+                if merged_quota and LIVE_STATE_FILE.exists():
+                    try:
+                        prev_state = json.loads(LIVE_STATE_FILE.read_text(encoding="utf-8"))
+                        prev_q = prev_state.get("quota") if isinstance(prev_state, dict) else None
+                        if isinstance(prev_q, dict) and prev_q:
+                            merged_quota = _merge_freshest_quota(merged_quota, prev_q)
+                            state["quota"] = merged_quota
+                            payload["quota"] = merged_quota
+                    except Exception:
+                        pass
                 atomic_write_text(LIVE_STATE_FILE, json.dumps(state, ensure_ascii=False))
 
-        quota = payload.get("quota")
-        if isinstance(quota, dict) and quota:
+        if isinstance(merged_quota, dict) and merged_quota:
             model_obj = payload.get("model") or {}
             ctx = payload.get("context_window") or {}
             record_quota_snapshot(
-                quota_obj=quota,
+                quota_obj=merged_quota,
                 source="statusline",
                 extra={
                     "model": model_obj.get("id") or model_obj.get("display_name") or "",

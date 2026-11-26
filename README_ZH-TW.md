@@ -1,11 +1,15 @@
-# 大模型額度還夠不夠？一眼看用掉多少、什麼時候恢復。
+# <img src="./docs/assets/logo.png" width="38" height="38" align="top" alt="AGY Usage Logo" /> Antigravity 額度與用量監控台 — 一眼看清 Gemini / Claude 用掉多少、何時重置
 
-> 🌐 [简体中文](./README.md) · **繁體中文** · [English](./README_EN.md) *(網頁監控台內建 11 國語言自動識別與右上角一鍵切換)*
+[![License: MIT](https://img.shields.io/badge/License-MIT-10b981.svg)](./LICENSE) ![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-0ea5e9.svg) ![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(Python%20Stdlib)-8b5cf6.svg) ![i18n](https://img.shields.io/badge/Languages-11%20Built--in-f59e0b.svg)
+
+> 🌐 [简体中文](./README.md) · **繁體中文** · [English](./README_EN.md) *(網頁監控台內建 11 國語言自動識別與右上角一鍵切換，支援「淺色 · 通透 · 深色」三套主題)*
 
 用 Antigravity 寫程式時，**5 小時額度**和**每週額度**常常不知不覺就快見底了，等突然卡住才發現已經晚了。  
 這個小工具在**你自己電腦本機**讀取使用紀錄，幫你把額度做成直觀的進度條與倒數計時——**不需要輸入任何帳號密碼，也不會往外網上傳你的對話內容**（介面裡的費用數字僅按公開單價做參考估算，不代表官方實際帳單）。
 
-![四格額度監控總覽](./docs/assets/overview-4buckets.svg)
+![四格額度監控總覽（通透主題）](./docs/assets/overview-4buckets.svg)
+
+![淺色 · 通透 · 深色 三套主題一鍵切換](./docs/assets/themes-3way.svg)
 
 - **網頁監控台**：左右並排看清 Gemini 與 Claude/GPT 兩套池子的「已用 %」和恢復時間（支援淺色/通透/深色主題與 11 國語言）。
 - **桌面小膠囊**：Mac 停在右上角（不怕瀏海擋住），Windows 停在右下角，寫程式時餘光就能瞄一眼。

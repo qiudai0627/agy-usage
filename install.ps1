@@ -9,7 +9,15 @@ $BinDir = Join-Path $env:USERPROFILE ".local\bin"
 
 $ScriptParent = if ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { "" }
 if ($ScriptParent -and (Test-Path (Join-Path $ScriptParent "src\cli.py"))) {
-    $RootDir = $ScriptParent
+    if (Test-Path (Join-Path $ScriptParent ".git")) {
+        $RootDir = $ScriptParent
+    } else {
+        $RootDir = Join-Path $env:LOCALAPPDATA "agy-usage\app"
+        if ($ScriptParent.TrimEnd("\") -ine $RootDir.TrimEnd("\")) {
+            New-Item -ItemType Directory -Force -Path $RootDir | Out-Null
+            Copy-Item -Path (Join-Path $ScriptParent "*") -Destination $RootDir -Recurse -Force
+        }
+    }
 } else {
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072
     $RepoSlug = if ($env:AGY_USAGE_REPO) { $env:AGY_USAGE_REPO } else { "qiudai0627/agy-usage" }

@@ -843,7 +843,8 @@ def analyze_quota_buckets(
             first, last_pt = recent[0], recent[-1]
             dt_hours = (last_pt["_dt"] - first["_dt"]).total_seconds() / 3600.0
             delta_used = last_pt["used_pct"] - first["used_pct"]
-            if dt_hours >= 0.05 and delta_used >= 0.05:
+            min_obs_h = 0.05 if window_kind == "five_hour" else 0.75
+            if dt_hours >= min_obs_h and delta_used >= 0.05:
                 burn_pct_per_hour = round(delta_used / dt_hours, 3)
                 burn_method = "observed"
                 if pool_key != "other" and delta_used >= 0.2:
@@ -856,9 +857,10 @@ def analyze_quota_buckets(
                     if win_tokens > 0:
                         tokens_per_1pct = round(win_tokens / delta_used, 0)
 
+        min_avg_h = 0.25 if window_kind == "five_hour" else 1.5
         if not reset_passed and burn_pct_per_hour is None and used_pct is not None and used_pct > 0.1 and cycle_start_dt is not None:
             elapsed_h = (now - cycle_start_dt).total_seconds() / 3600.0
-            if elapsed_h >= 0.25:
+            if elapsed_h >= min_avg_h:
                 burn_pct_per_hour = round(used_pct / elapsed_h, 3)
                 burn_method = "cycle_avg"
 
@@ -1620,10 +1622,15 @@ def build_analytics(window: str = "7d") -> Dict[str, Any]:
     sl_cmd = str(sl_cfg.get("command") or "")
     sl_installed = ("statusline.py" in sl_cmd) and (sl_cfg.get("enabled", True) is not False)
 
+    sl_full_path = str(APP_DIR / "statusline.py")
+    home_str = str(Path.home())
+    sl_disp_path = ("~" + sl_full_path[len(home_str):]) if sl_full_path.startswith(home_str) else sl_full_path
+
     live_session: Dict[str, Any] = {
         "connected": live_state is not None,
         "statusline_configured": sl_installed,
-        "statusline_path": str(APP_DIR / "statusline.py"),
+        "statusline_path": sl_full_path,
+        "statusline_display_path": sl_disp_path,
         "configured_model": settings.get("model") or "-",
         "configured_planner": (settings.get("orchestrator") or {}).get("planner") or "-",
         "agent_state": (live_state or {}).get("agent_state") or "-",

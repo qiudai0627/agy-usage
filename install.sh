@@ -10,7 +10,19 @@ BIN_DIR="${HOME}/.local/bin"
 
 SCRIPT_PATH="${BASH_SOURCE[0]:-}"
 if [ -n "$SCRIPT_PATH" ] && [ -f "$(dirname "$SCRIPT_PATH")/src/cli.py" ]; then
-  ROOT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+  SOURCE_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+  if [ -d "$SOURCE_DIR/.git" ]; then
+    ROOT_DIR="$SOURCE_DIR"
+  else
+    # 解压包安装（如在“桌面/下载”双击 Start-Mac.command）：自动同步至 ~/.local/share/agy-usage，
+    # 避免触发 macOS 访问桌面/下载目录弹窗，且安装后可随时删除原解压包。
+    ROOT_DIR="${HOME}/.local/share/agy-usage"
+    if [ "$SOURCE_DIR" != "$ROOT_DIR" ]; then
+      mkdir -p "$ROOT_DIR"
+      cp -R "$SOURCE_DIR"/. "$ROOT_DIR"/
+      xattr -cr "$ROOT_DIR" 2>/dev/null || true
+    fi
+  fi
 else
   REPO_SLUG="${AGY_USAGE_REPO:-qiudai0627/agy-usage}"
   ROOT_DIR="${HOME}/.local/share/agy-usage"

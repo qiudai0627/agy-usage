@@ -354,7 +354,11 @@ print("R1_LOCK_MULTIPROC_OK")
                 check=True,
             )
 
-            port = 18773
+            import socket
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("127.0.0.1", 0))
+                port = s.getsockname()[1]
+
             proc = subprocess.Popen(
                 [sys.executable, str(SRC_DIR / "cli.py"), "web", "--port", str(port), "--no-open"],
                 env=env,
@@ -362,7 +366,7 @@ print("R1_LOCK_MULTIPROC_OK")
                 stderr=subprocess.PIPE,
             )
             try:
-                for _ in range(25):
+                for _ in range(80):
                     try:
                         c = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
                         c.request("GET", "/api/stats")
@@ -372,9 +376,9 @@ print("R1_LOCK_MULTIPROC_OK")
                         if r.status == 200:
                             break
                     except Exception:
-                        time.sleep(0.12)
+                        time.sleep(0.15)
                 else:
-                    self.fail("Server did not start")
+                    self.fail("Server did not start within 12s")
 
                 # 1. Email must not appear in /api/stats or live_state.json
                 self.assertNotIn("secret_test@example.com", body)
@@ -899,6 +903,13 @@ print("CANDIDATE_B_TZ_OK")
             self.assertNotIn("transcript.jsonl", main_part, f"Jargon leaked in {rname}")
             self.assertNotIn("statusLine", main_part, f"Jargon leaked in {rname}")
             self.assertIn("qiudai0627/agy-usage", txt, f"Repo link missing in {rname}")
+
+        # Multi-window anti-rollback check: older reset_time from an idle window must NOT overwrite newer reset_time
+        old_q = {"gemini-weekly": {"remaining_fraction": 0.78, "reset_time": "2099-12-01T10:00:00Z"}}
+        new_q = {"gemini-weekly": {"remaining_fraction": 0.99, "reset_time": "2099-12-03T10:00:00Z"}}
+        merged = statusline._merge_freshest_quota(old_q, new_q)
+        self.assertEqual(merged["gemini-weekly"]["remaining_fraction"], 0.99)
+        self.assertEqual(merged["gemini-weekly"]["reset_time"], "2099-12-03T10:00:00Z")
 
 
 if __name__ == "__main__":

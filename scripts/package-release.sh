@@ -36,7 +36,9 @@ for f in "${SRC_FILES[@]}"; do
 done
 
 ASSET_FILES=(
+  logo.png
   overview-4buckets.svg
+  themes-3way.svg
   macos-pill.svg
   windows-pill.svg
   terminal-bar.svg

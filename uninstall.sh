@@ -9,7 +9,10 @@ PLIST="${HOME}/Library/LaunchAgents/local.agy.usage.menubar.plist"
 echo "==> 卸载 agy-usage"
 pkill -x "AGYUsageMenuBar" 2>/dev/null || true
 
-if [ -x "$ROOT_DIR/src/cli.py" ]; then
+if [ -x "$BIN_LINK" ]; then
+  "$BIN_LINK" daemon stop || true
+  "$BIN_LINK" uninstall-statusline || true
+elif [ -x "$ROOT_DIR/src/cli.py" ]; then
   "$ROOT_DIR/src/cli.py" daemon stop || true
   "$ROOT_DIR/src/cli.py" uninstall-statusline || true
 fi

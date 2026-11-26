@@ -28,8 +28,8 @@ LANG_OPTIONS: List[Tuple[str, str]] = [
 
 WEB_I18N: Dict[str, Dict[str, Any]] = {
     "zh-CN": {
-        "doc_title": "Antigravity · 实时用量与限额监控台",
-        "h1": "Antigravity 实时用量与限额监控台",
+        "doc_title": "Antigravity 实时额度与用量监控台 · Quota & Usage Monitor",
+        "h1": "Antigravity 实时额度与用量监控台",
         "syncing": "正在同步本地遥测数据...",
         "synced_sub": "同步于 {0} · 统计窗口：{1}",
         "sync_err": "同步中断: {0}",
@@ -218,8 +218,8 @@ WEB_I18N: Dict[str, Dict[str, Any]] = {
         "footnote": "纯本地隐私架构 · 数据仅保存在本机 · 费用与缓存节省按公开单价估算，非官方账单。",
     },
     "zh-TW": {
-        "doc_title": "Antigravity · 即時用量與額度監控台",
-        "h1": "Antigravity 即時用量與額度監控台",
+        "doc_title": "Antigravity 即時額度與用量監控台 · Quota & Usage Monitor",
+        "h1": "Antigravity 即時額度與用量監控台",
         "syncing": "正在同步本機遙測資料...",
         "synced_sub": "同步於 {0} · 統計區間：{1}",
         "sync_err": "同步中斷: {0}",

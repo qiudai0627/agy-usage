@@ -26,6 +26,8 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" <<'PLIST'
     <string>AGY Usage</string>
     <key>CFBundleDisplayName</key>
     <string>AGY Usage</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -46,6 +48,19 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" <<'PLIST'
 PLIST
 
 echo "==> 编译 macOS 菜单栏与防刘海悬浮胶囊应用: ${APP_BUNDLE}"
+LOGO_PNG="${SCRIPT_DIR}/../docs/assets/logo.png"
+if [ -f "${LOGO_PNG}" ] && command -v sips >/dev/null 2>&1 && command -v iconutil >/dev/null 2>&1; then
+  TMP_ICONSET="$(mktemp -d)/AppIcon.iconset"
+  mkdir -p "${TMP_ICONSET}"
+  for sz in 16 32 128 256 512; do
+    sips -z "${sz}" "${sz}" "${LOGO_PNG}" --out "${TMP_ICONSET}/icon_${sz}x${sz}.png" >/dev/null 2>&1 || true
+    sz2=$((sz * 2))
+    sips -z "${sz2}" "${sz2}" "${LOGO_PNG}" --out "${TMP_ICONSET}/icon_${sz}x${sz}@2x.png" >/dev/null 2>&1 || true
+  done
+  iconutil -c icns "${TMP_ICONSET}" -o "${APP_BUNDLE}/Contents/Resources/AppIcon.icns" >/dev/null 2>&1 || true
+  rm -rf "$(dirname "${TMP_ICONSET}")"
+fi
+
 swiftc -O "${SCRIPT_DIR}/MenuBarApp.swift" \
   -framework Cocoa \
   -o "${APP_BUNDLE}/Contents/MacOS/AGYUsageMenuBar"

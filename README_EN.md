@@ -1,11 +1,15 @@
-# Enough AI Quota Left? See What's Used & When It Resets at a Glance.
+# <img src="./docs/assets/logo.png" width="38" height="38" align="top" alt="AGY Usage Logo" /> Antigravity Quota & Usage Monitor — Live Gemini & Claude Limit, Reset Timer & Token Tracker
 
-> 🌐 [简体中文](./README.md) · [繁體中文](./README_ZH-TW.md) · **English** *(Web Dashboard auto-detects and switches across **11 languages**: English, 简体中文, 繁體中文, 日本語, 한국어, Español, Português, Deutsch, Français, Русский, Tiếng Việt)*
+[![License: MIT](https://img.shields.io/badge/License-MIT-10b981.svg)](./LICENSE) ![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-0ea5e9.svg) ![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(Python%20Stdlib)-8b5cf6.svg) ![i18n](https://img.shields.io/badge/Languages-11%20Built--in-f59e0b.svg)
+
+> 🌐 [简体中文](./README.md) · [繁體中文](./README_ZH-TW.md) · **English** *(Web Dashboard auto-detects and switches across **11 languages** with built-in **Light · Airy · Dark** color themes)*
 
 When coding in Google Antigravity, your **5-hour window** and **weekly quota** can quietly run low—and by the time you hit a rate limit mid-task, it's already disruptive.  
 This lightweight utility reads usage records **strictly on your own computer** and turns them into clear progress bars and reset countdowns. **No account passwords required, zero cloud uploads, zero third-party packages** (cost figures shown in the UI are reference estimates based on public API list prices, not official billing).
 
-![4-Bucket Quota Monitor Overview](./docs/assets/overview-4buckets.svg)
+![4-Bucket Quota Monitor Overview (Airy Theme)](./docs/assets/overview-4buckets.svg)
+
+![Light · Airy · Dark 3 Built-in Color Themes](./docs/assets/themes-3way.svg)
 
 - **Local Web Dashboard**: Side-by-side rings & pace bars for both **Gemini** and **Claude/GPT** pools, with Light / Airy / Dark themes and 11-language instant switching.
 - **Floating Desktop Pill**: Sits cleanly below the top-right menu bar on Mac (never hidden behind the MacBook camera notch) or above the bottom-right taskbar on Windows.

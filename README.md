@@ -1,11 +1,15 @@
-# 大模型额度还够不够？一眼看用掉多少、什么时候恢复。
+# <img src="./docs/assets/logo.png" width="38" height="38" align="top" alt="AGY Usage Logo" /> Antigravity 额度与用量监控台 — 一眼看清 Gemini / Claude 用掉多少、何时重置
 
-> 🌐 **简体中文** · [繁體中文](./README_ZH-TW.md) · [English](./README_EN.md) *(网页监控台内置 11 国语言自动识别与一键切换)*
+[![License: MIT](https://img.shields.io/badge/License-MIT-10b981.svg)](./LICENSE) ![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-0ea5e9.svg) ![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(Python%20Stdlib)-8b5cf6.svg) ![i18n](https://img.shields.io/badge/Languages-11%20Built--in-f59e0b.svg)
+
+> 🌐 **简体中文** · [繁體中文](./README_ZH-TW.md) · [English](./README_EN.md) *(网页监控台内置 11 国语言自动识别与一键切换，支持「浅色 · 通透 · 深色」三套主题)*
 
 用 Antigravity 写代码时，**5 小时限额**和**每周限额**常常不知不觉就快见底了，等突然卡住才发现已经晚了。  
 这个小工具在**你自己电脑本地**读取使用记录，帮你把额度做成直观的进度条和倒计时——**不需要输入任何账号密码，也不会往外网上传你的对话内容**（界面里的费用数字仅按公开单价做参考估算，不代表官方实际账单）。
 
-![四格额度监控总览](./docs/assets/overview-4buckets.svg)
+![四格额度监控总览（通透主题）](./docs/assets/overview-4buckets.svg)
+
+![浅色 · 通透 · 深色 三套主题一键切换](./docs/assets/themes-3way.svg)
 
 - **网页监控台**：左右并排看清 Gemini 和 Claude/GPT 两套池子的「已用 %」和恢复时间。
 - **桌面小胶囊**：Mac 停在右上角（不怕刘海挡住），Windows 停在右下角，写代码时余光就能瞄一眼。
@@ -72,7 +76,7 @@
 1. **网页 `http://127.0.0.1:18420` 打不开**
    - **原因**：后台看板没启动。
    - **怎么做**：重新双击一次 `Start-Mac.command`（Mac）或 `Start-Windows.bat`（Windows）。
-   - **成功标志**：浏览器正常打开深色监控页面。
+   - **成功标志**：浏览器正常打开监控页面。
 2. **网页打开了，但上面提示「等待首次触发」**
    - **原因**：你安装之前就已经开着的旧对话窗口，还没给监控台发过一次额度数据（此时工具绝不会拿假 `0%` 糊弄你）。
    - **怎么做**：关掉旧窗口**重开一个新的 Antigravity 对话发一句话**，或者点网页右上角的复制按钮，把那行口令贴进当前对话回车。

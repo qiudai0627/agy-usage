@@ -54,7 +54,35 @@ struct StatsResponse: Decodable {
     let windows: [String: WinSummary]
 }
 
-final class PillContentView: NSVisualEffectView {
+final class MenuInfoRowView: NSView {
+    init(attributedText: NSAttributedString, vPad: CGFloat = 5, leftInset: CGFloat = 18) {
+        let textBounds = attributedText.boundingRect(
+            with: NSSize(width: 600, height: 80),
+            options: [.usesLineFragmentOrigin, .usesFontLeading]
+        )
+        let rowW = max(248, ceil(textBounds.width) + leftInset + 16)
+        let labelH = ceil(textBounds.height) + 2
+        let rowH = max(21, labelH + vPad)
+        super.init(frame: NSRect(x: 0, y: 0, width: rowW, height: rowH))
+
+        let label = NSTextField(labelWithAttributedString: attributedText)
+        label.lineBreakMode = .byClipping
+        label.frame = NSRect(
+            x: leftInset,
+            y: floor((rowH - labelH) / 2.0),
+            width: rowW - leftInset - 10,
+            height: labelH
+        )
+        label.autoresizingMask = [.width]
+        addSubview(label)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+}
+
+final class PillContentView: NSView {
     var onClick: (() -> Void)?
     var onPositionChanged: ((NSPoint) -> Void)?
     private var dragStartMouse: NSPoint = .zero
@@ -96,6 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var pillPanel: NSPanel!
     private var pillView: PillContentView!
+    private var pillBlurView: NSVisualEffectView!
     private var pillLabel: NSTextField!
     private var sharedMenu: NSMenu = NSMenu()
     private var timer: Timer?
@@ -187,38 +216,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch theme {
         case "light":
             return ThemePalette(
-                gemTag: Self.hexColor(0x0E7490),
-                cldTag: Self.hexColor(0x6D28D9),
-                sep: Self.hexColor(0x9A7B88, alpha: 0.72),
-                ok: Self.hexColor(0x059669),
-                warn: Self.hexColor(0xD97706),
-                crit: Self.hexColor(0xDC2626),
-                expired: Self.hexColor(0x6B7280),
-                border: Self.hexColor(0xF472B6, alpha: 0.45),
-                tint: Self.hexColor(0xFFF5F8, alpha: 0.22)
+                gemTag: Self.hexColor(0x0EA5E9),
+                cldTag: Self.hexColor(0x8B5CF6),
+                sep: Self.hexColor(0x94A3B8, alpha: 0.78),
+                ok: Self.hexColor(0x10B981),
+                warn: Self.hexColor(0xF59E0B),
+                crit: Self.hexColor(0xF43F5E),
+                expired: Self.hexColor(0x94A3B8),
+                border: Self.hexColor(0xF472B6, alpha: 0.50),
+                tint: NSColor.clear
             )
         case "tongtou":
             return ThemePalette(
-                gemTag: Self.hexColor(0x4D7C7C),
-                cldTag: Self.hexColor(0x9A7B4F),
-                sep: Self.hexColor(0x78716C, alpha: 0.65),
-                ok: Self.hexColor(0x059669),
-                warn: Self.hexColor(0xD97706),
-                crit: Self.hexColor(0xDC2626),
-                expired: Self.hexColor(0x78716C),
-                border: Self.hexColor(0x7BA7A7, alpha: 0.55),
-                tint: Self.hexColor(0xF5F0EB, alpha: 0.30)
+                gemTag: Self.hexColor(0x38A3A5),
+                cldTag: Self.hexColor(0xC08A4B),
+                sep: Self.hexColor(0x94A3B8, alpha: 0.75),
+                ok: Self.hexColor(0x10B981),
+                warn: Self.hexColor(0xF59E0B),
+                crit: Self.hexColor(0xF43F5E),
+                expired: Self.hexColor(0x94A3B8),
+                border: Self.hexColor(0x7BA7A7, alpha: 0.54),
+                tint: NSColor.clear
             )
         default:
             return ThemePalette(
                 gemTag: Self.hexColor(0x38BDF8),
-                cldTag: Self.hexColor(0xA78BFA),
-                sep: Self.hexColor(0x94A3B8, alpha: 0.65),
+                cldTag: Self.hexColor(0xC084FC),
+                sep: Self.hexColor(0x94A3B8, alpha: 0.72),
                 ok: Self.hexColor(0x34D399),
                 warn: Self.hexColor(0xFBBF24),
                 crit: Self.hexColor(0xF87171),
                 expired: Self.hexColor(0x94A3B8),
-                border: Self.hexColor(0x38BDF8, alpha: 0.34),
+                border: Self.hexColor(0x38BDF8, alpha: 0.44),
                 tint: NSColor.clear
             )
         }
@@ -401,13 +430,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pillPanel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
 
         pillView = PillContentView(frame: NSRect(x: 0, y: 0, width: w, height: h))
-        pillView.material = .hudWindow
-        pillView.blendingMode = .behindWindow
-        pillView.state = .active
         pillView.wantsLayer = true
         pillView.layer?.cornerRadius = h / 2
         pillView.layer?.masksToBounds = true
         pillView.layer?.borderWidth = 1.0
+
+        pillBlurView = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: w, height: h))
+        pillBlurView.material = .hudWindow
+        pillBlurView.blendingMode = .behindWindow
+        pillBlurView.state = .active
+        pillBlurView.alphaValue = 0.50
+        pillBlurView.autoresizingMask = [.width, .height]
+        pillView.addSubview(pillBlurView)
 
         pillLabel = NSTextField(labelWithString: "● AGY")
         pillLabel.alignment = .center
@@ -440,6 +474,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let safePt = clampedOrigin(for: cand)
             pillPanel.setFrame(NSRect(x: safePt.x, y: safePt.y, width: idealW, height: pillHeight), display: true)
             pillView.frame = NSRect(x: 0, y: 0, width: idealW, height: pillHeight)
+            pillBlurView.frame = NSRect(x: 0, y: 0, width: idealW, height: pillHeight)
             pillLabel.frame = NSRect(x: 10, y: 5, width: idealW - 20, height: 18)
         }
     }
@@ -507,8 +542,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func updateQuotaIndicators(gem: QuotaBucket?, cld: QuotaBucket?, fallback: QuotaBucket?, level: String) {
         let pillPal = palette(for: resolvedTheme())
-        let pillFont = NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .semibold)
-        let pillTagFont = NSFont.systemFont(ofSize: 11.5, weight: .bold)
+        let pillFont = NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .bold)
+        let pillTagFont = NSFont.systemFont(ofSize: 11.5, weight: .heavy)
         let barFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
         let barTagFont = NSFont.systemFont(ofSize: 11, weight: .semibold)
 
@@ -623,18 +658,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func makeDisabledItem(_ title: String, monospaced: Bool = false, color: NSColor? = nil, bold: Bool = false) -> NSMenuItem {
+    private func makeDisabledItem(_ title: String, monospaced: Bool = false, color: NSColor? = nil, bold: Bool = false, fontSize: CGFloat = 11.5) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        item.isEnabled = false
-        if monospaced || color != nil || bold {
-            let font: NSFont = monospaced
-                ? NSFont.monospacedSystemFont(ofSize: 11, weight: bold ? .semibold : .regular)
-                : NSFont.systemFont(ofSize: 11.5, weight: bold ? .semibold : .regular)
-            item.attributedTitle = NSAttributedString(string: title, attributes: [
-                .font: font,
-                .foregroundColor: color ?? NSColor.labelColor
-            ])
+        let weight: NSFont.Weight = bold ? .semibold : .regular
+        let font: NSFont = monospaced
+            ? NSFont.monospacedSystemFont(ofSize: fontSize - 0.5, weight: weight)
+            : NSFont.systemFont(ofSize: fontSize, weight: weight)
+        let resolvedColor: NSColor
+        if let c = color {
+            resolvedColor = c.withAlphaComponent(bold ? 0.72 : 0.58)
+        } else {
+            resolvedColor = NSColor.labelColor.withAlphaComponent(bold ? 0.68 : 0.55)
         }
+        let attr = NSAttributedString(string: title, attributes: [
+            .font: font,
+            .foregroundColor: resolvedColor
+        ])
+        item.view = MenuInfoRowView(attributedText: attr, vPad: bold ? 5 : 4)
         return item
     }
 
@@ -648,19 +688,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ? tr("待刷新", "待更新", "Refresh")
             : "\(tr("重置", "重置", "Resets")) \(b.reset_time_cst ?? "-")"
         let usedWord = tr("已用", "已用", "Used")
-        let mono = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-        let monoBold = NSFont.monospacedSystemFont(ofSize: 11, weight: .semibold)
+        let monoReg = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        let monoSemi = NSFont.monospacedSystemFont(ofSize: 11, weight: .semibold)
         let valCol = valueColor(usedPct: used, expired: exp, pal: pal)
 
         let attr = NSMutableAttributedString()
-        attr.append(NSAttributedString(string: "  \(tag)  ", attributes: [.font: mono, .foregroundColor: NSColor.labelColor]))
-        attr.append(NSAttributedString(string: asciiBar(used), attributes: [.font: mono, .foregroundColor: valCol]))
-        attr.append(NSAttributedString(string: String(format: "  %@ %5.1f%%", usedWord, used), attributes: [.font: monoBold, .foregroundColor: valCol]))
-        attr.append(NSAttributedString(string: "  (\(rst))", attributes: [.font: mono, .foregroundColor: NSColor.secondaryLabelColor]))
+        attr.append(NSAttributedString(string: "  \(tag)  ", attributes: [.font: monoReg, .foregroundColor: NSColor.labelColor.withAlphaComponent(0.55)]))
+        attr.append(NSAttributedString(string: asciiBar(used), attributes: [.font: monoReg, .foregroundColor: valCol.withAlphaComponent(0.68)]))
+        attr.append(NSAttributedString(string: String(format: "  %@ %5.1f%%", usedWord, used), attributes: [.font: monoSemi, .foregroundColor: valCol.withAlphaComponent(0.75)]))
+        attr.append(NSAttributedString(string: "  (\(rst))", attributes: [.font: monoReg, .foregroundColor: NSColor.labelColor.withAlphaComponent(0.45)]))
 
         let item = NSMenuItem(title: attr.string, action: nil, keyEquivalent: "")
-        item.isEnabled = false
-        item.attributedTitle = attr
+        item.view = MenuInfoRowView(attributedText: attr, vPad: 4)
         return item
     }
 
@@ -671,11 +710,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let tier = (st.live_session.plan_tier ?? "").isEmpty || st.live_session.plan_tier == "-"
                 ? ""
                 : " · \(st.live_session.plan_tier!)"
-            let hdr = NSMenuItem(title: "\(tr("Antigravity 实时监控", "Antigravity 即時監控", "Antigravity Live Monitor"))\(tier)", action: nil, keyEquivalent: "")
-            hdr.attributedTitle = NSAttributedString(string: hdr.title, attributes: [
-                .font: NSFont.systemFont(ofSize: 12, weight: .bold)
-            ])
-            menu.addItem(hdr)
+            menu.addItem(makeDisabledItem(
+                "\(tr("Antigravity 实时监控", "Antigravity 即時監控", "Antigravity Live Monitor"))\(tier)",
+                color: NSColor.labelColor,
+                bold: true,
+                fontSize: 12.0
+            ))
             menu.addItem(makeDisabledItem("\(tr("主模型", "主模型", "Model")): \(st.live_session.active_model ?? "-")"))
             menu.addItem(NSMenuItem.separator())
 
@@ -811,18 +851,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch appearancePref {
         case "dark":
             NSApp.appearance = NSAppearance(named: .darkAqua)
-            if pillView != nil {
-                pillView.appearance = NSAppearance(named: .vibrantDark)
+            if pillBlurView != nil {
+                pillBlurView.appearance = NSAppearance(named: .vibrantDark)
             }
         case "light", "tongtou":
             NSApp.appearance = NSAppearance(named: .aqua)
-            if pillView != nil {
-                pillView.appearance = NSAppearance(named: .vibrantLight)
+            if pillBlurView != nil {
+                pillBlurView.appearance = NSAppearance(named: .vibrantLight)
             }
         default:
             NSApp.appearance = nil
-            if pillView != nil {
-                pillView.appearance = nil
+            if pillBlurView != nil {
+                pillBlurView.appearance = nil
             }
         }
         refreshPillChrome()
@@ -830,9 +870,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refreshPillChrome() {
         guard pillView != nil else { return }
-        let pal = palette(for: resolvedTheme())
+        let theme = resolvedTheme()
+        let pal = palette(for: theme)
+        pillBlurView?.material = .hudWindow
+        pillBlurView?.alphaValue = 0.50
         pillView.layer?.borderColor = pal.border.cgColor
-        pillView.layer?.backgroundColor = pal.tint.cgColor
+        pillView.layer?.backgroundColor = NSColor.clear.cgColor
     }
 
     @objc private func setAppearancePref(_ sender: NSMenuItem) {

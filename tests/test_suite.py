@@ -938,6 +938,19 @@ print("CANDIDATE_B_TZ_OK")
         merged_stale = statusline._merge_freshest_quota(cand_stale_win, prev_active)
         self.assertEqual(merged_stale["3p-weekly"]["remaining_fraction"], 0.24)
 
+        # (e) Idle 100%-full 5h bucket (sentinel 1970-01-01 + reset_in_seconds=0) must render 0.0% Used, NOT expired/待刷新!
+        idle_payload = dict(payload)
+        idle_payload["quota"] = dict(payload["quota"], **{
+            "3p-5h": {"remaining_fraction": 1.0, "reset_time": "1970-01-01T00:00:00Z", "reset_in_seconds": 0}
+        })
+        out_idle = re.sub(r"\x1b\[[0-9;]*m", "", statusline.render(dict(idle_payload, lang="zh-CN", terminal_width=150)))
+        self.assertIn("Claude5h ░░░░ 已用0.0%", out_idle)
+        self.assertNotIn("待刷新", out_idle)
+        q_idle = core.analyze_quota_buckets({"quota": idle_payload["quota"], "captured_at": datetime.now(timezone.utc).isoformat()}, [], [], datetime.now(timezone.utc))
+        c5_bkt = [b for b in q_idle["buckets"] if b["id"] == "3p-5h"][0]
+        self.assertFalse(c5_bkt["reset_passed"])
+        self.assertEqual(c5_bkt["used_pct"], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

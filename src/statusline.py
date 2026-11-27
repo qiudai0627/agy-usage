@@ -347,9 +347,12 @@ def extract_four_slots(payload: Dict[str, Any], lang: str = "zh-CN") -> List[Dic
         if not isinstance(raw, dict) or raw.get("disabled"):
             continue
         rf = extract_remaining_fraction(raw)
-        reset_dt = parse_iso_dt(raw.get("reset_time"))
+        reset_dt = _valid_reset_dt(raw)
         reset_sec = raw.get("reset_in_seconds")
-        if reset_dt is not None:
+        is_idle_full = reset_dt is None and rf is not None and rf >= 0.9999 and (reset_sec is None or float(reset_sec) <= 0)
+        if is_idle_full:
+            reset_sec = None
+        elif reset_dt is not None:
             reset_sec = (reset_dt - now).total_seconds()
         elif reset_sec is not None:
             reset_sec = float(reset_sec)

@@ -684,9 +684,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let tag = b.window_kind == "five_hour"
             ? tr("当前5h", "當前5h", "5h Win")
             : tr("每周7d", "每週7d", "7d Wk ")
+        let rstTime = b.reset_time_cst ?? "-"
         let rst = exp
             ? tr("待刷新", "待更新", "Refresh")
-            : "\(tr("重置", "重置", "Resets")) \(b.reset_time_cst ?? "-")"
+            : (rstTime == "-" ? "" : "\(tr("重置", "重置", "Resets")) \(rstTime)")
         let usedWord = tr("已用", "已用", "Used")
         let monoReg = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
         let monoSemi = NSFont.monospacedSystemFont(ofSize: 11, weight: .semibold)
@@ -696,7 +697,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         attr.append(NSAttributedString(string: "  \(tag)  ", attributes: [.font: monoReg, .foregroundColor: NSColor.labelColor.withAlphaComponent(0.55)]))
         attr.append(NSAttributedString(string: asciiBar(used), attributes: [.font: monoReg, .foregroundColor: valCol.withAlphaComponent(0.68)]))
         attr.append(NSAttributedString(string: String(format: "  %@ %5.1f%%", usedWord, used), attributes: [.font: monoSemi, .foregroundColor: valCol.withAlphaComponent(0.75)]))
-        attr.append(NSAttributedString(string: "  (\(rst))", attributes: [.font: monoReg, .foregroundColor: NSColor.labelColor.withAlphaComponent(0.45)]))
+        if !rst.isEmpty {
+            attr.append(NSAttributedString(string: "  (\(rst))", attributes: [.font: monoReg, .foregroundColor: NSColor.labelColor.withAlphaComponent(0.45)]))
+        }
 
         let item = NSMenuItem(title: attr.string, action: nil, keyEquivalent: "")
         item.view = MenuInfoRowView(attributedText: attr, vPad: 4)

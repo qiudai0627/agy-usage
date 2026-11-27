@@ -762,8 +762,13 @@ def analyze_quota_buckets(
         rem_frac = extract_remaining_fraction(raw)
         rem_amt = raw.get("remaining_amount")
         reset_dt = parse_iso_dt(raw.get("reset_time"))
+        if reset_dt is not None and reset_dt.year <= 1971:
+            reset_dt = None
         reset_in_sec = raw.get("reset_in_seconds")
-        if reset_dt is not None:
+        is_idle_full = reset_dt is None and rem_frac is not None and rem_frac >= 0.9999 and (reset_in_sec is None or float(reset_in_sec) <= 0)
+        if is_idle_full:
+            reset_in_sec = None
+        elif reset_dt is not None:
             reset_in_sec = max(0.0, (reset_dt - now).total_seconds())
         elif reset_in_sec is not None and captured_at is not None:
             reset_in_sec = max(0.0, float(reset_in_sec) - (now - captured_at).total_seconds())
@@ -772,7 +777,14 @@ def analyze_quota_buckets(
         label, window_kind, cycle_hours, pool_key, pool_desc = infer_bucket_meta(bid, reset_in_sec)
         rem_pct = round(rem_frac * 100.0, 2) if rem_frac is not None else None
         used_pct = round((1.0 - rem_frac) * 100.0, 2) if rem_frac is not None else None
-        reset_passed = (reset_dt is not None and reset_dt <= now) or (reset_in_sec is not None and reset_in_sec <= 0)
+        raw_reset_dt = parse_iso_dt(raw.get("reset_time"))
+        if raw_reset_dt is not None and raw_reset_dt.year <= 1971:
+            raw_reset_dt = None
+        raw_reset_sec = raw.get("reset_in_seconds")
+        reset_passed = (not is_idle_full) and (
+            (raw_reset_dt is not None and raw_reset_dt <= now)
+            or (raw_reset_dt is None and raw_reset_sec is not None and float(raw_reset_sec) - ((now - captured_at).total_seconds() if captured_at else 0.0) <= 0)
+        )
 
         time_elapsed_pct: Optional[float] = None
         pacing_ratio: Optional[float] = None

@@ -1234,7 +1234,7 @@ function renderQuota(data) {
         <div style="min-width:0">
           <div class="b-top">
             <div><span class="b-name">${esc(winTitle)}</span> <span style="color:var(--muted)">${esc(tr('rem_val', remDisp))}</span> ${badge}</div>
-            <span style="color:var(--cyan);font-weight:600;font-size:11px" ${resetEpoch ? `data-reset-ts="${resetEpoch}"` : ''}>${b.reset_passed ? esc(tr('expired_wait')) : esc(tr('rem_time', remCountdown))}</span>
+            <span style="color:var(--cyan);font-weight:600;font-size:11px" ${resetEpoch ? `data-reset-ts="${resetEpoch}"` : ''}>${b.reset_passed ? esc(tr('expired_wait')) : (b.reset_in_seconds != null ? esc(tr('rem_time', remCountdown)) : '')}</span>
           </div>
           <div class="dual-bar" data-tip-title="${esc(bDisp)}" data-tip="${esc(tr('dual_tip', usedDisp, (b.time_elapsed_pct||0).toFixed(1), b.reset_time_cst, data.timezone_label || 'UTC+8'))}">
             <div class="dual-fill" style="width:${used}%;background:${col}"></div>

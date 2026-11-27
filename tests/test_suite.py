@@ -946,6 +946,7 @@ print("CANDIDATE_B_TZ_OK")
         out_idle = re.sub(r"\x1b\[[0-9;]*m", "", statusline.render(dict(idle_payload, lang="zh-CN", terminal_width=150)))
         self.assertIn("Claude5h ░░░░ 已用0.0%", out_idle)
         self.assertNotIn("待刷新", out_idle)
+        import core
         q_idle = core.analyze_quota_buckets({"quota": idle_payload["quota"], "captured_at": datetime.now(timezone.utc).isoformat()}, [], [], datetime.now(timezone.utc))
         c5_bkt = [b for b in q_idle["buckets"] if b["id"] == "3p-5h"][0]
         self.assertFalse(c5_bkt["reset_passed"])

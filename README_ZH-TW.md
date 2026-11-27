@@ -1,155 +1,132 @@
-# <img src="./docs/assets/logo.png" width="38" height="38" align="top" alt="AGY Usage Logo" /> Antigravity 額度與用量監控台 — 一眼看清 Gemini / Claude 用掉多少、何時重置
+<div align="center">
+  <img src="./docs/assets/logo.png" width="84" height="84" alt="Antigravity Usage Monitor" />
+  <h1>Antigravity 即時額度與用量監控台</h1>
+  <p><b>AGY Usage · 雙池四桶即時配速、Token 快取分析與多端懸浮膠囊</b></p>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-10b981.svg)](./LICENSE) ![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-0ea5e9.svg) ![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(Python%20Stdlib)-8b5cf6.svg) ![i18n](https://img.shields.io/badge/Languages-11%20Built--in-f59e0b.svg)
+  <p>
+    <a href="https://github.com/qiudai0627/agy-usage/releases"><img src="https://img.shields.io/badge/Release-v1.4.0-0ea5e9.svg" alt="Release" /></a>
+    <a href="https://github.com/qiudai0627/agy-usage/actions"><img src="https://github.com/qiudai0627/agy-usage/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+    <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-10b981.svg" alt="License: MIT" /></a>
+    <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-6366f1.svg" alt="Platform" />
+    <img src="https://img.shields.io/badge/Dependencies-Zero%20(Python%203.9%2B)-8b5cf6.svg" alt="Zero Dependencies" />
+    <img src="https://img.shields.io/badge/i18n-11%20Languages-f59e0b.svg" alt="11 Languages" />
+  </p>
 
-> 🌐 [简体中文](./README.md) · **繁體中文** · [English](./README_EN.md) *(網頁監控台內建 11 國語言自動識別與右上角一鍵切換，支援「淺色 · 通透 · 深色」三套主題)*
+  <p>
+    <a href="./README.md">简体中文</a> · <b>繁體中文</b> · <a href="./README_EN.md">English</a>
+  </p>
+</div>
 
-用 Antigravity 寫程式時，**5 小時額度**和**每週額度**常常不知不覺就快見底了，等突然卡住才發現已經晚了。  
-這個小工具在**你自己電腦本機**讀取使用紀錄，幫你把額度做成直觀的進度條與倒數計時——**不需要輸入任何帳號密碼，也不會往外網上傳你的對話內容**（介面裡的費用數字僅按公開單價做參考估算，不代表官方實際帳單）。
+<p align="center">
+  <img src="./docs/assets/overview-4buckets.svg" width="100%" alt="AGY Usage Dashboard Overview" />
+</p>
 
-![四格額度監控總覽（通透主題）](./docs/assets/overview-4buckets.svg)
+<p align="center">
+  <img src="./docs/assets/themes-3way.svg" width="100%" alt="Light · Airy · Dark Themes" />
+</p>
 
-![淺色 · 通透 · 深色 三套主題一鍵切換](./docs/assets/themes-3way.svg)
+## 核心特性
 
-- **網頁監控台**：左右並排看清 Gemini 與 Claude/GPT 兩套池子的「已用 %」和恢復時間（支援淺色/通透/深色主題、11 國語言與 **📸 一鍵去識別化戰報曬單卡**）。
-- **桌面小膠囊**：Mac 停在右上角（不怕瀏海擋住），Windows 停在右下角，寫程式時餘光就能瞄一眼。
-- **終端機底部進度條**：不遮擋對話，跟著你的每次提問自動更新。
+- **雙池四桶即時配速**：獨立追蹤 **Google Gemini**（`5h` + `7d`）與 **Claude · GPT**（`5h` + `7d`）額度已用百分比、秒級重置倒數、週期配速比與耗盡預測。
+- **全形態桌面與終端協同**：提供本地 Web 監控台（`127.0.0.1:18420`）、macOS 原生防瀏海毛玻璃膠囊與選單列應用、Windows 桌面迷你懸浮窗及自適應終端底欄。
+- **深度 Token 與快取洞察**：內建近 5h（10m 粒度）燃速圖、24h / 7d 堆疊趨勢、7×24 活躍熱力圖、自然週同進度環比，以及單對話逐輪上下文增長抽屜與 CSV 匯出。
+- **去識別戰報卡與智慧提醒**：內建 2× 高清去識別戰報分享卡產生器（`淺色 · 通透 · 深色`），支援去重式 80% / 95% 門檻預警與額度回血桌面通知。
+- **100% 純本地隱私架構**：免帳號登入、零雲端上傳、零外部網路請求；本地回環服務內建 `Host` / `Origin` / `Sec-Fetch-Site` 安全校驗。
+- **零第三方執行期依賴**：基於 Python 3.9+ 標準庫（`O(1)` 單對話增量分片索引）與原生 Swift / `tkinter`，Web 介面內建 11 國語言一鍵切換。
 
----
+## 快速安裝
 
-## 開始前準備
+環境需求：已安裝 **Google Antigravity** 與 **Python 3.9+**（macOS 原生懸浮膠囊可選裝 `xcode-select --install`）。
 
-1. 你的電腦上已經安裝並在使用 **Google Antigravity**。
-2. 電腦裡有 **Python 3.9 或更新版本**（Mac 一般內建或裝過開發工具就有；Windows 安裝 Python 時記得勾選 `Add Python to PATH`）。
-3. **選配**：Mac 右上角毛玻璃小膠囊需要系統內建的命令列編譯工具（`xcode-select --install`）；如果暫時沒裝也不影響，網頁監控台照樣能直接用。
+### macOS / Linux
 
----
-
-## 三步用起來
-
-### 第 1 步：安裝啟動
-
-**如果你用 Mac：**
-- **方法一（推薦，打開「終端機」貼上並按 Enter）**：
-  ```bash
-  curl -fsSL https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.sh | bash
-  ```
-- **方法二（Homebrew 安裝 CLI）**：
-  ```bash
-  brew install qiudai0627/tap/agy-usage
-  ```
-- **方法三（不想敲指令）**：去 [Releases 下載壓縮包](https://github.com/qiudai0627/agy-usage/releases) 解壓縮，右鍵點擊 **`Start-Mac.command`** 選擇「**打開**」。
-
-**如果你用 Windows：**
-- **方法一（推薦，打開 PowerShell 貼上並按 Enter）**：
-  ```powershell
-  irm https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.ps1 | iex
-  ```
-- **方法二（不想敲指令）**：下載解壓縮後，直接雙擊 **`Start-Windows.bat`**。
-
----
-
-### 第 2 步：裝完看螢幕哪裡？
-
-安裝完成後會自動打開三個地方（你喜歡看哪個就用哪個）：
-1. **瀏覽器網頁**：自動開啟 `http://127.0.0.1:18420` 完整監控台（右上角 `🌐` 可隨時切換繁中 / 簡中 / 英文 / 日文等 11 種語言）。
-2. **螢幕角落小膠囊**：Mac 看螢幕右上角選單列正下方；Windows 看螢幕右下角工作列上方（按住可拖動位置，點擊可展開四格進度與切換語言/外觀）。
-
-| Mac 右上角防瀏海小膠囊 | Windows 右下角迷你小膠囊 |
-| :---: | :---: |
-| ![Mac 懸浮膠囊示意](./docs/assets/macos-pill.svg) | ![Windows 懸浮膠囊示意](./docs/assets/windows-pill.svg) |
-
-3. **終端機最底下**：多出一條四格彩色額度條（不會重複印一遍模型名字，右邊也留好了空位避開提示框）：
-
-![終端機底部彩色額度條示意](./docs/assets/terminal-bar.svg)
-
----
-
-### 第 3 步：啟用額度百分比
-
-**新開一個 Antigravity 視窗隨便發一句話**（或者在已經開著的視窗裡，把安裝結束時提示的那行啟用口令貼進去發一次），幾秒內四個格子的「已用 %」和恢復倒數就會全部亮起來。
-
-![從等待推送到顯示百分比](./docs/assets/empty-to-active.svg)
-
----
-
-## 沒顯示百分比怎麼辦？
-
-對照下面三種情況，做一個動作就能解決：
-
-1. **網頁 `http://127.0.0.1:18420` 打不開**
-   - **原因**：背景看板沒啟動。
-   - **怎麼做**：重新雙擊一次 `Start-Mac.command`（Mac）或 `Start-Windows.bat`（Windows）。
-   - **成功標誌**：瀏覽器正常開啟監控頁面。
-2. **網頁打開了，但上面提示「等待首次觸發」**
-   - **原因**：你安裝之前就已經開著的舊對話視窗，還沒給監控台發過一次額度資料（此時工具絕不會拿假 `0%` 糊弄你）。
-   - **怎麼做**：關掉舊視窗**重開一個新的 Antigravity 對話發一句話**，或者點網頁右上角的複製按鈕，把那行口令貼進目前對話按 Enter。
-   - **成功標誌**：網頁頂部變成左右兩張帶圓環的卡片，顯示真實的「已用 %」。
-3. **百分比停在很久以前不動了**
-   - **原因**：這段時間你沒有發起新對話，或者剛剛跨過重置時間點還沒發新訊息。
-   - **怎麼做**：在 Antigravity 裡正常發一條訊息，後端就會更新最新額度。
-   - **成功標誌**：網頁頂部「同步於…」變成剛剛的時間，「待重新整理」變成新的倒數計時。
-
----
-
-## 四個格子怎麼讀？
-
-- **左邊兩格是 Google Gemini 池，右邊兩格是 Claude / GPT 池**：這兩套額度是**分開算**的。哪怕右邊 Claude 用到了 60%，左邊 Gemini 依然有充足額度可以用。
-- **每個池子都分「5h 視窗」和「7d 每週」兩條線**：
-  - **5h 視窗**：防短時間猛刷的短期額度，幾小時就會自動回滿。
-  - **7d 每週**：一週的總額度，哪一條先到 **100%** 都會觸發限額。
-- **統一看「已用 %」**：數字越小、綠條越短說明額度越寬裕；超過 55% 變黃提醒，超過 80% 變紅告急。
-
----
-
-## 常見問題（FAQ）
-
-- **問：為什麼官方網頁裡寫「已使用 0%」，這裡卻能看到小數？**  
-  答：可能是官方頁面按整數四捨五入展示或存在更新時間差（例如「1 小時前更新」）。本工具直接展示本機收到的原始比例，方便儘早看出趨勢，但不替代官方最終結算口徑。
-- **問：把瀏覽器網頁關掉，背景還會繼續記錄嗎？**  
-  答：會的。只要你在用 Antigravity 對話，底欄每次更新都會自動把最新額度記在本機快取裡，隨時再打開網頁就能看到完整曲線。
-- **問：我的資料存在哪裡？安全嗎？**  
-  答：全部儲存在你自己電腦的本機快取目錄（Mac 在 `~/.cache/agy-usage/`，Windows 在 `%LOCALAPPDATA%\agy-usage\`），不連網上傳。
-- **問：遇到問題或有建議怎麼回饋？**  
-  答：直接在本儲存庫提交 [GitHub Issue](https://github.com/qiudai0627/agy-usage/issues) 即可。
-
----
-
-## 怎麼解除安裝？
-
-不想用了可以一鍵還原設定並停掉背景服務：
-
-- **Mac / Linux**：在專案目錄執行 `./uninstall.sh`（如果是一行指令安裝的，執行 `~/.local/share/agy-usage/uninstall.sh`）。
-- **Windows**：在專案目錄打開 PowerShell 執行：
-  ```powershell
-  powershell -ExecutionPolicy Bypass -File .\uninstall.ps1
-  ```
-  *(如果是遠端一行指令安裝的，腳本位於 `%LOCALAPPDATA%\agy-usage\app\uninstall.ps1`，請**先執行它完成移除**，最後如果不想保留歷史曲線，再手動刪除 `%LOCALAPPDATA%\agy-usage` 或 Mac 的 `~/.cache/agy-usage` 資料夾。)*
-
----
-
-<details>
-<summary><b>附錄：命令列速查、健康清理與開發者說明（點擊展開）</b></summary>
-
-### 常用終端機指令
 ```bash
-agy-usage                    # 終端機列印完整報告（支援 -w 5h/today/24h/week/7d/all）
-agy-usage watch              # 終端機每 2 秒自動更新面板
-agy-usage daemon status      # 查看背景網頁服務狀態（支援 start / stop / restart）
-agy-usage notify on          # 開啟 80%/95% 額度提醒與恢復桌面通知（預設 off，隨時可關）
-agy-usage clean              # 壓縮去重歷史快照、輪轉日誌並清理多餘設定備份
-agy-usage doctor             # 先唯讀體檢鏈路與儲存健康（加 --fix 可一鍵修復設定與孤兒暫存檔）
-agy-usage json               # 匯出結構化 JSON 資料
+curl -fsSL https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.sh | bash
 ```
 
-### 技術說明與打包自檢
-- 本專案使用 Python 3.9+ 標準庫與 macOS 原生 Swift 編寫，零第三方套件依賴，前端無 Node 建置鏈。
-- 終端機底欄可透過環境變數 `AGY_USAGE_LANG=zh-TW`（或 `en`）切換顯示語言。
-- 本機開發驗證與零隱私洩露打包：
+亦可透過 Homebrew 安裝 CLI：
+
+```bash
+brew install qiudai0627/tap/agy-usage
+```
+
+### Windows (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.ps1 | iex
+```
+
+> **免指令列方式**：前往 [Releases](https://github.com/qiudai0627/agy-usage/releases) 下載壓縮包解壓，macOS 右鍵開啟 `Start-Mac.command`，Windows 雙擊 `Start-Windows.bat`。安裝後新開一個 Antigravity 對話（或將監控台頂欄提示的啟用指令貼入目前對話）即可同步即時額度。
+
+## 多端形態預覽
+
+| macOS 防瀏海毛玻璃膠囊 & 選單列 | Windows 工作列迷你懸浮膠囊 |
+| :---: | :---: |
+| ![macOS Floating Pill](./docs/assets/macos-pill.svg) | ![Windows Mini Widget](./docs/assets/windows-pill.svg) |
+
+<p align="center">
+  <img src="./docs/assets/terminal-bar.svg" width="100%" alt="Terminal Quota Bar" />
+</p>
+
+## 指令列速查
+
+| 指令 | 說明 |
+| :--- | :--- |
+| `agy-usage [-w 5h\|today\|24h\|week\|7d\|all]` | 在終端機輸出多視窗額度與 Token 統計報告 |
+| `agy-usage watch [-i 2]` | 終端機即時自動重新整理監控面板 |
+| `agy-usage daemon start\|stop\|restart\|status` | 管理背景常駐 Web 監控台（預設 `127.0.0.1:18420`） |
+| `agy-usage notify on\|off\|status` | 開啟或關閉 80% / 95% 額度預警與回血桌面通知 |
+| `agy-usage clean [--keep-days 30]` | 壓縮去重歷史快照、輪轉日誌並清理舊備份 |
+| `agy-usage doctor [--fix]` | 唯讀健檢採集鏈路與快取健康，`--fix` 一鍵自修復 |
+| `agy-usage record-quota <bucket> <rem_pct>` | 手動校準指定額度池剩餘百分比 |
+| `agy-usage json` | 輸出結構化 JSON 統計資料 |
+
+<details>
+<summary><b>專案架構與模組目錄</b></summary>
+
+```text
+agy-usage/
+├── src/
+│   ├── cli.py             # CLI 入口、設定管理與子指令路由
+│   ├── server.py          # 本地回環 HTTP 服務（CSRF / DNS Rebinding 防護）與背景程序
+│   ├── tui.py             # ANSI 終端分析報告與 watch 即時面板
+│   ├── statusline.py      # 官方 statusLine 即時額度採集與多視窗防回跳狀態列
+│   ├── storage.py         # 跨平台檔案鎖、原子寫入、時區與模型參考單價
+│   ├── transcripts.py     # 本地 transcript.jsonl 解析與 O(1) 對話增量分片快取
+│   ├── quota.py           # 四桶額度配速、耗盡預測與快照歸檔壓縮
+│   ├── analytics.py       # 多時間窗聚合、7x24 熱力圖、自然週同進度環比與 CSV 匯出
+│   ├── notifications.py   # 去重式 80% / 95% 預警與回血桌面通知
+│   ├── maintenance.py     # 日誌保 inode 輪轉、快取瘦身與 doctor 健康診斷
+│   ├── i18n.py            # 多語言資源載入器
+│   ├── locales/           # 11 國語言獨立 JSON 詞典 (zh-CN, zh-TW, en, ja, ko, ...)
+│   ├── web_ui.py          # 零 CDN 前端靜態資源裝配器
+│   └── web/               # 獨立前端模組 (index.html, styles.css, charts.js, app.js, share_card.js)
+├── macos/                 # macOS 原生 Swift 選單列與防瀏海毛玻璃懸浮膠囊
+├── windows/               # Windows tkinter 無邊框桌面迷你懸浮窗
+├── scripts/               # 隱私零外洩門禁掃描與跨平台發佈打包腳本
+└── tests/                 # 全隔離沙箱單元與多行程鎖並行回歸測試套件
+```
+
+- **本地快取目錄**：macOS / Linux 位於 `~/.cache/agy-usage/`，Windows 位於 `%LOCALAPPDATA%\agy-usage\`。
+- **開發自檢與打包**：
   ```bash
   ./verify.sh
   ./scripts/package-release.sh
   ```
-- 開源授權：[MIT License](./LICENSE)
 
 </details>
+
+<details>
+<summary><b>常見問題與一鍵解除安裝</b></summary>
+
+- **監控台顯示「待觸發推送」**：安裝前已開啟的舊視窗尚未觸發首次推送；新開一個 Antigravity 對話傳送任意訊息，或複製監控台頂欄指令在目前對話執行一次即可啟用（未收到真實資料前絕不偽造 `0%`）。
+- **費用估算口徑**：介面中的美元金額與快取節省按公開 API 參考單價估算，僅用於衡量吞吐量級與快取收益，不代表官方帳單。
+- **一鍵解除安裝**：
+  - **macOS / Linux**：執行 `./uninstall.sh`（遠端安裝路徑為 `~/.local/share/agy-usage/uninstall.sh`）。
+  - **Windows**：執行 `powershell -ExecutionPolicy Bypass -File .\uninstall.ps1`（遠端安裝路徑為 `%LOCALAPPDATA%\agy-usage\app\uninstall.ps1`）。
+
+</details>
+
+## License
+
+[MIT License](./LICENSE)

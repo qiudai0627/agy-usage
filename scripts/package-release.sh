@@ -8,7 +8,7 @@ OUT_ZIP="${1:-${HOME}/.cache/agy-usage/agy-usage-release.zip}"
 STAGE_DIR="$(mktemp -d)"
 trap 'rm -rf "$STAGE_DIR"' EXIT
 PKG_DIR="$STAGE_DIR/agy-usage"
-mkdir -p "$PKG_DIR/src" "$PKG_DIR/macos" "$PKG_DIR/windows" "$PKG_DIR/scripts" \
+mkdir -p "$PKG_DIR/src/locales" "$PKG_DIR/src/web" "$PKG_DIR/macos" "$PKG_DIR/windows" "$PKG_DIR/scripts" \
          "$PKG_DIR/docs/assets" "$PKG_DIR/tests" "$PKG_DIR/.github/workflows"
 
 # Explicit file manifest (never globs untracked private scripts)
@@ -30,9 +30,33 @@ for f in "${ROOT_FILES[@]}"; do
   cp "$ROOT_DIR/$f" "$PKG_DIR/$f"
 done
 
-SRC_FILES=(cli.py core.py i18n.py statusline.py web_ui.py)
+SRC_FILES=(
+  analytics.py
+  cli.py
+  core.py
+  i18n.py
+  maintenance.py
+  notifications.py
+  quota.py
+  server.py
+  statusline.py
+  storage.py
+  transcripts.py
+  tui.py
+  web_ui.py
+)
 for f in "${SRC_FILES[@]}"; do
   cp "$ROOT_DIR/src/$f" "$PKG_DIR/src/$f"
+done
+
+LOCALE_FILES=(de.json en.json es.json fr.json ja.json ko.json pt-BR.json ru.json vi.json zh-CN.json zh-TW.json)
+for f in "${LOCALE_FILES[@]}"; do
+  cp "$ROOT_DIR/src/locales/$f" "$PKG_DIR/src/locales/$f"
+done
+
+WEB_FILES=(app.js charts.js index.html logo.b64 share_card.js styles.css)
+for f in "${WEB_FILES[@]}"; do
+  cp "$ROOT_DIR/src/web/$f" "$PKG_DIR/src/web/$f"
 done
 
 ASSET_FILES=(

@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/png" href="__LOGO_DATA_URI__" />
+<title>AGY Usage · Quota &amp; Token Monitor</title>
+<script>
+(function () {
+  var p = localStorage.getItem('agy-usage-theme') || 'system';
+  var r = (p === 'light' || p === 'dark' || p === 'tongtou') ? p
+    : (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+  document.documentElement.setAttribute('data-theme', r);
+  document.documentElement.style.colorScheme = (r === 'dark') ? 'dark' : 'light';
+})();
+</script>
+<style>
+__STYLES_CSS__
+</style>
+</head>
+<body>
+<div id="tip"></div>
+<div class="backdrop" id="backdrop"></div>
+
+<!-- Session Inspector Drawer -->
+<aside class="drawer" id="session-drawer">
+  <div class="drawer-head">
+    <div style="min-width:0">
+      <div style="font-weight:650;font-size:13.5px;color:var(--text-strong)" id="dr-title">会话详情</div>
+      <div style="font-size:11px;color:var(--muted)" id="dr-sub">加载中...</div>
+    </div>
+    <button class="btn" data-action="close" data-i18n="dr_close">关闭 ✕</button>
+  </div>
+  <div class="drawer-body" id="dr-body"></div>
+</aside>
+
+<!-- Manual Quota Calibration Modal -->
+<div class="modal" id="quota-modal">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+    <strong style="font-size:13.5px;color:var(--text-strong)" data-i18n="mq_title">手动录入 /usage 限额快照</strong>
+    <button class="btn" data-action="close">✕</button>
+  </div>
+  <p style="font-size:11px;color:var(--muted);margin:0 0 10px;" data-i18n="mq_desc">填入 /usage 页面看到的「已使用 %」，即可立即生成周配速与耗尽预测。</p>
+  <div class="field">
+    <label data-i18n="mq_pool">限额池</label>
+    <select id="mq-bucket">
+      <option value="gemini-5h">Gemini · 5h (gemini-5h)</option>
+      <option value="gemini-weekly">Gemini · 7d (gemini-weekly)</option>
+      <option value="claude-5h">Claude/GPT · 5h (3p-5h)</option>
+      <option value="claude-weekly">Claude/GPT · 7d (3p-weekly)</option>
+    </select>
+  </div>
+  <div class="field">
+    <label data-i18n="mq_used">已使用百分比 (0 ~ 100)</label>
+    <input id="mq-used" type="number" step="0.01" min="0" max="100" data-i18n-ph="mq_used_ph" placeholder="例如 9.1 或 54.9" />
+  </div>
+  <div class="field">
+    <label><span data-i18n="mq_reset">重置时间</span> <span id="modal-tz-lbl">UTC+8</span> <span data-i18n="mq_reset_opt">(可选，如 12-01 18:46)</span></label>
+    <input id="mq-reset" type="text" placeholder="12-01 18:46" />
+  </div>
+  <div id="mq-msg" style="font-size:11px;margin-bottom:8px;color:var(--red)"></div>
+  <div style="display:flex;justify-content:flex-end;gap:6px;">
+    <button class="btn" data-action="close" data-i18n="mq_cancel">取消</button>
+    <button class="btn primary" id="mq-save-btn" data-i18n="mq_save">保存</button>
+  </div>
+</div>
+
+<!-- Share Card Modal -->
+<div class="modal modal-wide" id="share-modal">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;">
+    <div style="font-size:13.5px;font-weight:700;color:var(--text-strong);" data-i18n="sc_title">生成战报晒单卡</div>
+    <button class="btn" data-action="close" data-i18n="dr_close">关闭 ✕</button>
+  </div>
+  <div class="sc-toolbar">
+    <div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;">
+      <div class="pills" id="sc-win-pills">
+        <button class="pill active" type="button" data-sc-win="7d" data-i18n="w_7d">近7天</button>
+        <button class="pill" type="button" data-sc-win="today" data-i18n="w_today">今日</button>
+        <button class="pill" type="button" data-sc-win="all" data-i18n="w_all">全部</button>
+      </div>
+      <div class="pills" id="sc-theme-pills">
+        <button class="pill active" type="button" data-sc-theme="tongtou" data-i18n="th_tongtou">通透</button>
+        <button class="pill" type="button" data-sc-theme="light" data-i18n="th_light">浅色</button>
+        <button class="pill" type="button" data-sc-theme="dark" data-i18n="th_dark">深色</button>
+      </div>
+    </div>
+    <label class="sc-chk"><input type="checkbox" id="sc-usd-chk" checked /> <span data-i18n="sc_show_usd">显示估算节省金额 ($)</span></label>
+  </div>
+  <div class="sc-preview-wrap">
+    <canvas id="sc-canvas" width="1560" height="1048"></canvas>
+  </div>
+  <div class="sc-actions">
+    <button class="btn" type="button" id="sc-copy-post-btn" data-i18n="sc_copy_post">📝 复制推荐文案+安装口令</button>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="btn" type="button" id="sc-dl-btn" data-i18n="sc_dl_png">⬇️ 下载高清 PNG</button>
+      <button class="btn primary" type="button" id="sc-copy-img-btn" data-i18n="sc_copy_img">📋 复制战报图片</button>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+  <header class="hero-header">
+    <div class="brand-hero">
+      <div class="brand-title-row">
+        <img class="logo" id="brand-logo-img" src="__LOGO_DATA_URI__" alt="Antigravity Usage Monitor" width="60" height="60" />
+        <h1 data-i18n="h1">Antigravity 实时额度与用量监控台</h1>
+        <span id="plan-badge-slot"></span>
+      </div>
+      <div class="telemetry-pill" id="live-banner">
+        <span class="dot ok" id="sync-dot"></span><span id="subtitle" data-i18n="syncing">正在同步本地遥测数据...</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="command-bar">
+    <div class="pills" id="win-pills">
+      <button class="pill" data-win="5h" data-i18n="w_5h">5小时</button>
+      <button class="pill" data-win="today" data-i18n="w_today">今日</button>
+      <button class="pill" data-win="24h" data-i18n="w_24h">24h</button>
+      <button class="pill" data-win="week" data-i18n="w_week">本周</button>
+      <button class="pill active" data-win="7d" data-i18n="w_7d">近7天</button>
+      <button class="pill" data-win="all" data-i18n="w_all">全部</button>
+    </div>
+    <div class="controls">
+      <button class="fire-cta" type="button" id="share-btn" data-open-share="1">
+        <span class="fire-cta-in">
+          <svg class="fire-svg" viewBox="0 0 24 24" aria-hidden="true">
+            <circle class="eb1" cx="9" cy="4" r="1.4" fill="#fde047"/>
+            <circle class="eb2" cx="15.5" cy="5" r="1.1" fill="#fb923c"/>
+            <path d="M12.4 2.2c.4 3.2-1.9 4.9-2.8 6.8-.9 1.9-.3 3.6 1.1 4.2-.3-1.5.5-2.8 1.9-3.6 1.2 1.8 1.7 3.7.9 5.5 1.8-.6 2.9-2.4 2.8-4.5 2.1 1.7 3.1 4.5 2.1 7.2-1.1 2.9-3.9 4.6-6.8 4.6-3.4 0-6.2-2.3-6.7-5.6-.5-3.4 1.5-6.6 4.4-8.9-.2 1.5.4 2.6 1.4 3.1-.5-3.1 1.7-6.3 1.7-8.8z" fill="#ff4d00"/>
+            <path d="M12.1 7.6c.7 1.9-.6 3.3-1.3 4.7-.7 1.4-.3 3.1 1.1 3.9-.2-1 .3-2 1.2-2.5.8 1.2.9 2.7.2 3.9 1.6-.5 2.5-2.2 1.9-4.1-.5-1.7-1.9-3.2-3.1-5.9z" fill="#ffb703"/>
+            <path d="M11.8 13.2c.5 1.2-.2 2.2-.5 3.1-.3.9.2 2 1.2 2.3.9.2 1.9-.5 2-1.5.2-1.2-.9-2.3-2.7-3.9z" fill="#fffbeb"/>
+          </svg>
+          <span id="hdr-share-lbl" data-i18n="sc_btn">战报卡</span>
+        </span>
+      </button>
+      <span class="ctrl-sep"></span>
+      <button class="btn live-on" id="live-btn"><span class="dot ok"></span><span id="live-btn-lbl" data-i18n="live_on">实时 3s</span></button>
+      <button class="btn" id="notify-btn" data-i18n-title="ntf_tip" title="开启或关闭 80%/95% 额度提醒与回血桌面通知">🔔</button>
+      <button class="btn" id="open-modal-btn" data-i18n="add_quota">＋录入限额</button>
+      <button class="btn" id="export-btn" data-i18n="export_csv">导出 CSV</button>
+      <div class="pills" id="theme-pills" data-i18n-title="th_title" title="外观主题">
+        <button class="pill" type="button" data-theme-pref="light" data-i18n="th_light">浅色</button>
+        <button class="pill" type="button" data-theme-pref="tongtou" data-i18n="th_tongtou">通透</button>
+        <button class="pill" type="button" data-theme-pref="dark" data-i18n="th_dark">深色</button>
+        <button class="pill" type="button" data-theme-pref="system" data-i18n="th_system">系统</button>
+      </div>
+      <select class="btn lang-sel" id="lang-select" data-i18n-title="lang_title" title="切换界面语言 / Language"></select>
+    </div>
+  </div>
+
+  <!-- Row 1: Dual Pool Quota Hero Cards -->
+  <div id="quota-section"></div>
+
+  <!-- Row 2: 4 Umami-Style KPI Cards -->
+  <div class="grid grid-4" id="kpi-cards"></div>
+
+  <!-- Row 3: Trend Chart (Left) + 7x24 Heatmap & Pool Split (Right) -->
+  <div class="grid grid-main">
+    <div class="card">
+      <div class="card-head">
+        <div class="pills" id="chart-tabs">
+          <button class="pill active" data-ctab="5h" data-i18n="ct_5h">近5h燃速 (10m)</button>
+          <button class="pill" data-ctab="24h" data-i18n="ct_24h">24h每小时</button>
+          <button class="pill" data-ctab="7d" data-i18n="ct_7d">7日周趋势</button>
+          <button class="pill" data-ctab="quota" data-i18n="ct_quota">限额已用曲线</button>
+        </div>
+        <div class="pills" id="metric-pills">
+          <button class="pill active" data-metric="billable_tokens" data-i18n="m_billable">有效Token</button>
+          <button class="pill" data-metric="total_tokens" data-i18n="m_total">含缓存</button>
+          <button class="pill" data-metric="calls" data-i18n="m_calls">调用数</button>
+          <button class="pill" data-metric="est_cost_usd" data-i18n="m_cost">估算$</button>
+        </div>
+      </div>
+      <div class="chart-box" id="main-chart-box"></div>
+      <div class="legend" id="main-chart-legend"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title"><span data-i18n="hm_title">7日 × 24小时作业热力图</span> <span class="card-sub" id="tz-lbl">UTC+8</span></span>
+        <div style="display:inline-flex;align-items:center;gap:4px;font-size:10px;color:var(--muted);">
+          <span data-i18n="hm_low">低</span>
+          <span class="swatch" style="background:var(--heat-0)"></span>
+          <span class="swatch" style="background:var(--heat-1)"></span>
+          <span class="swatch" style="background:var(--heat-2)"></span>
+          <span class="swatch" style="background:var(--heat-3)"></span>
+          <span class="swatch" style="background:var(--heat-4)"></span>
+          <span data-i18n="hm_high">高</span>
+        </div>
+      </div>
+      <div class="heatmap-wrap" id="heatmap-box"></div>
+      <div style="margin-top:12px;padding-top:11px;border-top:1px solid var(--border);">
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:6px;">
+          <span><span data-i18n="pool_share_lbl">模型限额池占比</span> · <span id="win-badge-pool">近7天</span></span>
+          <span id="pool-total-lbl"></span>
+        </div>
+        <div id="pool-compact-bars"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Row 4: Breakdown Table (Left) + Live Stream (Right) -->
+  <div class="grid grid-main" style="align-items:start">
+    <div class="card">
+      <div class="card-head">
+        <div class="pills" id="detail-tabs">
+          <button class="pill active" data-dtab="convs" data-i18n="dt_convs">会话消耗排行</button>
+          <button class="pill" data-dtab="models" data-i18n="dt_models">细分模型明细</button>
+          <button class="pill" data-dtab="tools" data-i18n="dt_tools">工作区 &amp; 高频工具</button>
+        </div>
+        <input class="search-input" id="conv-search" type="text" data-i18n-ph="search_ph" placeholder="搜索会话 / 工作区 / 模型..." />
+      </div>
+      <div id="detail-pane-convs" style="overflow-x:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th data-i18n="th_conv">会话标题</th>
+              <th data-i18n="th_ws">工作区</th>
+              <th class="num sortable" data-sort="calls" data-i18n="th_calls_s">调用 ↕</th>
+              <th class="num sortable" data-sort="billable_tokens" data-i18n="th_bill_s">有效Token ↕</th>
+              <th class="num sortable" data-sort="peak_context" data-i18n="th_peak_s">峰值上下文 ↕</th>
+              <th class="num sortable" data-sort="cache_hit_pct" data-i18n="th_hit_s">缓存率 ↕</th>
+              <th class="num sortable" data-sort="est_cost_usd" data-i18n="th_cost_s">估算$ ↕</th>
+            </tr>
+          </thead>
+          <tbody id="conv-tbody"></tbody>
+        </table>
+      </div>
+      <div id="detail-pane-models" style="display:none;overflow-x:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th data-i18n="th_model">模型名称</th>
+              <th data-i18n="th_pool">所属限额池</th>
+              <th class="num" data-i18n="th_calls">调用</th>
+              <th class="num" data-i18n="th_in">新增输入</th>
+              <th class="num" data-i18n="th_cache">缓存命中</th>
+              <th class="num" data-i18n="th_out">输出</th>
+              <th class="num" data-i18n="th_hit">缓存率</th>
+              <th class="num" data-i18n="th_cost">估算$</th>
+            </tr>
+          </thead>
+          <tbody id="model-tbody"></tbody>
+        </table>
+      </div>
+      <div id="detail-pane-tools" style="display:none;">
+        <div class="grid grid-2" style="margin-bottom:0">
+          <div>
+            <div style="font-size:11.5px;font-weight:600;margin-bottom:8px;color:var(--text-strong)" data-i18n="ws_share">工作区消耗占比</div>
+            <div id="project-list"></div>
+          </div>
+          <div>
+            <div style="font-size:11.5px;font-weight:600;margin-bottom:8px;color:var(--text-strong)" data-i18n="top_tools">高频 Agent 工具调用</div>
+            <div id="tools-list"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title" data-i18n="recent_title">最近调用实时流水</span>
+        <span class="badge ok" data-i18n="recent_badge">最新 18 条</span>
+      </div>
+      <div style="overflow-x:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th data-i18n="th_time">时间</th>
+              <th data-i18n="th_model_conv">模型 / 会话</th>
+              <th class="num" data-i18n="th_in_short">新增</th>
+              <th class="num" data-i18n="th_cache_short">缓存</th>
+              <th class="num" data-i18n="th_out">输出</th>
+            </tr>
+          </thead>
+          <tbody id="recent-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <footer class="foot">
+    <span data-i18n="footnote">100% 本地存储 · 零遥测外传 · 费用按公开 API 单价估算</span>
+    <span class="mono" style="opacity:0.75">127.0.0.1 · Zero-Dependency</span>
+  </footer>
+</div>
+
+<script>
+const LANG_OPTIONS = __LANG_OPTIONS_JSON__;
+const I18N = __WEB_I18N_JSON__;
+__CHARTS_JS__
+__APP_JS__
+__SHARE_CARD_JS__
+</script>
+</body>
+</html>

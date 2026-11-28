@@ -1,10 +1,10 @@
 <div align="center">
   <img src="./docs/assets/logo.png" width="84" height="84" alt="Antigravity Usage Monitor" />
   <h1>Antigravity 实时额度与用量监控台</h1>
-  <p><b>AGY Usage · 双池四桶实时配速、Token 缓存分析与多端悬浮胶囊</b></p>
+  <p><b>看懂 Antigravity 用量、双池配速与缓存健康：纯本地只读客户端数据、零 CDP 注入、零第三方 Python 依赖、无需账号凭据</b></p>
 
   <p>
-    <a href="https://github.com/qiudai0627/agy-usage/releases"><img src="https://img.shields.io/badge/Release-v1.4.0-0ea5e9.svg" alt="Release" /></a>
+    <a href="https://github.com/qiudai0627/agy-usage/releases"><img src="https://img.shields.io/badge/Release-v1.5.0-0ea5e9.svg" alt="Release" /></a>
     <a href="https://github.com/qiudai0627/agy-usage/actions"><img src="https://github.com/qiudai0627/agy-usage/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
     <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-10b981.svg" alt="License: MIT" /></a>
     <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-6366f1.svg" alt="Platform" />
@@ -31,14 +31,28 @@
 - **全形态桌面与终端协同**：提供本地 Web 监控台（`127.0.0.1:18420`）、macOS 原生防刘海毛玻璃胶囊与菜单栏应用、Windows 桌面迷你悬浮窗及自适应终端底栏。
 - **深度 Token 与缓存洞察**：内置近 5h（10m 粒度）燃速图、24h / 7d 堆叠趋势、7×24 活跃热力图、自然周同进度环比，以及单会话逐轮上下文增长抽屉与 CSV 导出。
 - **脱敏战报卡与智能提醒**：内置 2× 高清脱敏战报分享卡生成器（`浅色 · 通透 · 深色`），支持去重式 80% / 95% 阈值预警与额度回血桌面通知。
-- **100% 纯本地隐私架构**：免账号登录、零云端上传、零外部网络请求；本地回环服务内置 `Host` / `Origin` / `Sec-Fetch-Site` 安全校验。
-- **零第三方运行时依赖**：基于 Python 3.9+ 标准库（`O(1)` 单会话增量分片索引）与原生 Swift / `tkinter`，Web 界面内置 11 国语言一键切换。
+- **官方原生 AGY 插件与三层清晰边界**：内置自包含 `plugins/agy-usage/`（`/agy-usage` Skill + 4 工具零依赖 `stdio` MCP Server），零 CDP 注入、不改客户端磁盘文件、安装无默认副作用。
+- **零第三方运行时依赖**：基于 Python 3.9+ 标准库（`O(1)` 单会话增量分片索引 + 跨平台单实例锁与实例身份握手）与原生 Swift / `tkinter`，Web 界面内置 11 国语言一键切换。
+
+## 三层数据与安全边界（透明披露）
+
+| 层级 | 范围与行为说明 |
+| :--- | :--- |
+| **1. 客户端数据层（纯只读、零侵入）** | 仅只读解析本地 Antigravity 日志与状态文件；无 CDP 注入、无 `--remote-debugging-port`、不修改客户端磁盘文件、不读取账号/OAuth 凭据。 |
+| **2. 本工具自有本地状态层** | 自有缓存、偏好与日志保存在 `~/.cache/agy-usage/`（Windows 为 `%LOCALAPPDATA%\agy-usage\`）；官方原生插件安装零默认副作用，CLI 安装脚本仅在用户执行或显式确认时写入可逆的终端底栏配置。 |
+| **3. MCP 对话上下文层** | 启用原生插件 MCP 时，脱敏聚合指标（不含对话标题、正文、preview、本地路径与原始会话 ID）会返回并进入宿主模型对话上下文。 |
 
 ## 快速安装
 
 环境要求：已安装 **Google Antigravity** 与 **Python 3.9+**（macOS 原生悬浮胶囊可选装 `xcode-select --install`）。
 
-### macOS / Linux
+### 方式一：官方原生 AGY 插件（零默认副作用，含 `/agy-usage` 与 4 只读 MCP 工具）
+
+```bash
+agy plugin install https://github.com/qiudai0627/agy-usage/tree/main/plugins/agy-usage
+```
+
+### 方式二：完整桌面与终端监控套件（macOS / Linux）
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.sh | bash

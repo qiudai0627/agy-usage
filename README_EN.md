@@ -1,10 +1,10 @@
 <div align="center">
   <img src="./docs/assets/logo.png" width="84" height="84" alt="Antigravity Usage Monitor" />
   <h1>Antigravity Quota &amp; Usage Monitor</h1>
-  <p><b>AGY Usage · Real-Time Dual-Pool Quota Pacing, Token Analytics &amp; Desktop Widgets</b></p>
+  <p><b>Understand Antigravity quota pacing, token usage &amp; cache health: read-only local client data, zero CDP injection, zero Python runtime dependencies, no credentials required</b></p>
 
   <p>
-    <a href="https://github.com/qiudai0627/agy-usage/releases"><img src="https://img.shields.io/badge/Release-v1.4.0-0ea5e9.svg" alt="Release" /></a>
+    <a href="https://github.com/qiudai0627/agy-usage/releases"><img src="https://img.shields.io/badge/Release-v1.5.0-0ea5e9.svg" alt="Release" /></a>
     <a href="https://github.com/qiudai0627/agy-usage/actions"><img src="https://github.com/qiudai0627/agy-usage/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
     <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-10b981.svg" alt="License: MIT" /></a>
     <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-6366f1.svg" alt="Platform" />
@@ -31,14 +31,28 @@
 - **Multi-Surface Experience**: Ships a local Web Dashboard (`127.0.0.1:18420`), a native macOS Swift notch-safe glass pill & menu bar app, a Windows taskbar mini-widget, and an adaptive terminal bar.
 - **Deep Token & Cache Analytics**: 5h (10-minute) burst chart, 24h / 7d stacked model trends, 7×24 activity heatmap, same-progress week-over-week comparison, turn-by-turn session context inspector, and CSV export.
 - **Share Card & Smart Alerts**: Built-in 2× Retina privacy-redacted Share Card generator (`Light · Airy · Dark`) plus deduplicated 80% / 95% threshold & quota-recovery desktop notifications.
-- **100% Local & Private**: Zero login, zero cloud sync, zero outbound requests; loopback-only HTTP server hardened with `Host`, `Origin`, and `Sec-Fetch-Site` verification.
-- **Zero Runtime Dependencies**: Pure Python 3.9+ standard library (`O(1)` incremental per-session shard cache) + native Swift / `tkinter`, with 11 built-in UI languages.
+- **Official Native AGY Plugin & Clear 3-Layer Boundary**: Ships a self-contained `plugins/agy-usage/` bundle (`/agy-usage` skill + 4 read-only zero-dependency `stdio` MCP tools) with zero CDP injection and zero default install side effects.
+- **Zero Runtime Dependencies**: Pure Python 3.9+ standard library (`O(1)` incremental per-session shard cache + cross-platform single-instance lock & identity handshake) + native Swift / `tkinter`, with 11 built-in UI languages.
+
+## Three-Layer Data & Safety Boundary
+
+| Layer | Scope & Behavior |
+| :--- | :--- |
+| **1. Antigravity Client Data (Read-Only, Zero Injection)** | Reads local Antigravity transcripts and state files only. No CDP injection, no `--remote-debugging-port`, no client file patching, and no credential/OAuth access. |
+| **2. Tool-Owned Local State** | Stores its own cache, preferences, and logs under `~/.cache/agy-usage/` (`%LOCALAPPDATA%\agy-usage\` on Windows). Installing the native plugin has zero default side effects; CLI install scripts only configure reversible terminal status bar settings when explicitly run. |
+| **3. MCP Conversation Context** | When the native plugin MCP server is enabled, sanitized aggregate metrics (stripped of conversation titles, bodies, previews, local workspace paths, and raw session IDs) enter the host model conversation context. |
 
 ## Quick Start
 
 Prerequisites: **Google Antigravity** and **Python 3.9+** (optional `xcode-select --install` on macOS to compile the native Swift menu bar pill).
 
-### macOS / Linux
+### Option 1: Official Native AGY Plugin (Zero Default Side Effects — `/agy-usage` + 4 Read-Only MCP Tools)
+
+```bash
+agy plugin install https://github.com/qiudai0627/agy-usage/tree/main/plugins/agy-usage
+```
+
+### Option 2: Full Desktop & Terminal Suite (macOS / Linux)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.sh | bash

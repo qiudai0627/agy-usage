@@ -181,15 +181,19 @@ def _remove_single_conv_cache(path_str: str) -> None:
         pass
 
 
-def _load_disk_transcript_index() -> None:
+def _load_disk_transcript_index(read_only: bool = False) -> None:
     """Load per-conversation cache shards (and seamlessly migrate legacy monolithic index once)."""
     global _DISK_INDEX_LOADED
     with _CACHE_LOCK:
         if _DISK_INDEX_LOADED:
             return
-        CONV_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        if not read_only:
+            try:
+                CONV_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
 
-        if TRANSCRIPT_INDEX_FILE.exists():
+        if not read_only and TRANSCRIPT_INDEX_FILE.exists():
             try:
                 raw = json.loads(TRANSCRIPT_INDEX_FILE.read_text(encoding="utf-8"))
                 entries = raw.get("files") if isinstance(raw, dict) else None
@@ -211,25 +215,26 @@ def _load_disk_transcript_index() -> None:
             except Exception:
                 pass
 
-        for shard in CONV_CACHE_DIR.glob("*.json"):
-            try:
-                info = json.loads(shard.read_text(encoding="utf-8"))
-                if not isinstance(info, dict):
+        if CONV_CACHE_DIR.is_dir():
+            for shard in CONV_CACHE_DIR.glob("*.json"):
+                try:
+                    info = json.loads(shard.read_text(encoding="utf-8"))
+                    if not isinstance(info, dict):
+                        continue
+                    path_str = info.get("path")
+                    if not isinstance(path_str, str) or not path_str:
+                        continue
+                    mtime_ns = _safe_nonneg_int(info.get("mtime_ns")) or 0
+                    size = _safe_nonneg_int(info.get("size")) or 0
+                    evs = []
+                    for item in info.get("events") or []:
+                        if isinstance(item, dict):
+                            h = _hydrate_event_ts(item)
+                            if h is not None:
+                                evs.append(h)
+                    _MEM_TRANSCRIPT_CACHE[path_str] = (mtime_ns, size, evs)
+                except Exception:
                     continue
-                path_str = info.get("path")
-                if not isinstance(path_str, str) or not path_str:
-                    continue
-                mtime_ns = _safe_nonneg_int(info.get("mtime_ns")) or 0
-                size = _safe_nonneg_int(info.get("size")) or 0
-                evs = []
-                for item in info.get("events") or []:
-                    if isinstance(item, dict):
-                        h = _hydrate_event_ts(item)
-                        if h is not None:
-                            evs.append(h)
-                _MEM_TRANSCRIPT_CACHE[path_str] = (mtime_ns, size, evs)
-            except Exception:
-                continue
 
         _DISK_INDEX_LOADED = True
 
@@ -285,8 +290,8 @@ def _parse_single_transcript(p: Path, cid: str) -> List[Dict[str, Any]]:
     return file_events
 
 
-def load_transcript_events() -> List[Dict[str, Any]]:
-    _load_disk_transcript_index()
+def load_transcript_events(read_only: bool = False) -> List[Dict[str, Any]]:
+    _load_disk_transcript_index(read_only=read_only)
     events: List[Dict[str, Any]] = []
     seen_convs = set()
     active_paths = set()
@@ -327,13 +332,16 @@ def load_transcript_events() -> List[Dict[str, Any]]:
         for k in stale_keys:
             _MEM_TRANSCRIPT_CACHE.pop(k, None)
 
-    if updated_shards or stale_keys:
-        with file_lock(DATA_DIR / ".index.lock", timeout=1.5) as locked:
-            if locked:
-                for path_str, mtime_ns, size, parsed in updated_shards:
-                    _save_single_conv_cache(path_str, mtime_ns, size, parsed)
-                for k in stale_keys:
-                    _remove_single_conv_cache(k)
+    if not read_only and (updated_shards or stale_keys):
+        try:
+            with file_lock(DATA_DIR / ".index.lock", timeout=1.5) as locked:
+                if locked:
+                    for path_str, mtime_ns, size, parsed in updated_shards:
+                        _save_single_conv_cache(path_str, mtime_ns, size, parsed)
+                    for k in stale_keys:
+                        _remove_single_conv_cache(k)
+        except OSError:
+            pass
 
     events.sort(key=lambda e: e["ts"])
     return events

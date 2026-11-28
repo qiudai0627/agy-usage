@@ -73,5 +73,12 @@ subprocess.check_call([sys.executable, cli, "doctor", "--stale-days", "30"], env
 print("✓ 全隔离合成冒烟通过 (buckets=4, calls=2, shards=1)")
 PY
 
-echo "==> 3. 运行全量单元测试套件 (刀 A / C / D / E 回归验证)"
+echo "==> 3. 运行全量单元测试套件 (核心回归 + v1.5.0 G02-G05 插件/MCP/单实例锁验收)"
 python3 "$ROOT_DIR/tests/test_suite.py"
+python3 "$ROOT_DIR/tests/test_v15_plugin.py"
+
+if command -v agy >/dev/null 2>&1; then
+  echo "==> 4. 运行官方插件严格校验 (agy plugin validate --strict --json)"
+  agy plugin validate --strict --json "$ROOT_DIR/plugins/agy-usage" >/dev/null
+  echo "✓ agy plugin validate --strict 通过"
+fi

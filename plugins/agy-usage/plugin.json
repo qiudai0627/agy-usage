@@ -1,0 +1,27 @@
+{
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
+  "name": "agy-usage",
+  "displayName": "AGY Usage",
+  "version": "1.5.0",
+  "description": "Read-only local quota, token usage, and cache health monitor for Antigravity with zero third-party Python dependencies.",
+  "logo": "assets/logo.png",
+  "suggestedPrompts": [
+    "Check my current Antigravity four-bucket quota remaining and reset countdowns",
+    "Summarize my token usage and estimated list-price savings over the last 7 days",
+    "Check my prompt cache hit rate and local agy-usage pipeline health"
+  ],
+  "author": {
+    "name": "qiudai0627",
+    "url": "https://github.com/qiudai0627"
+  },
+  "homepage": "https://github.com/qiudai0627/agy-usage",
+  "repository": "https://github.com/qiudai0627/agy-usage",
+  "license": "MIT",
+  "keywords": [
+    "quota",
+    "tokens",
+    "usage",
+    "monitoring",
+    "cache"
+  ]
+}

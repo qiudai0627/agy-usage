@@ -14,11 +14,26 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 import webbrowser
 
 from analytics import build_analytics, export_sessions_csv, get_conversation_detail
+from instance_lock import (
+    APP_VERSION,
+    PROTOCOL_VERSION,
+    SERVICE_NAME,
+    daemon_transaction_lock,
+    generate_instance_id,
+    get_pid_start_id,
+    is_port_in_use,
+    read_instance_meta,
+    remove_instance_meta,
+    stop_verified_pid,
+    verify_live_instance,
+    wait_for_ready_handshake,
+    write_instance_meta,
+)
 from maintenance import append_web_log, rotate_web_log
 from notifications import get_preferences, set_preferences
 from quota import save_manual_quota
@@ -30,7 +45,7 @@ PID_FILE = DATA_DIR / "web.pid"
 LOG_FILE = DATA_DIR / "web.log"
 
 
-def make_handler(port: int) -> type:
+def make_handler(port: int, *, instance_id: str = "", owner: str = "foreground") -> type:
     allowed_hosts = {
         f"127.0.0.1:{port}",
         f"localhost:{port}",
@@ -95,6 +110,19 @@ def make_handler(port: int) -> type:
 
             if path in ("/", "/index.html"):
                 self._send(200, "text/html; charset=utf-8", DASHBOARD_HTML.encode("utf-8"))
+                return
+
+            if path == "/api/health":
+                health = {
+                    "ok": True,
+                    "service": SERVICE_NAME,
+                    "protocol_version": PROTOCOL_VERSION,
+                    "version": APP_VERSION,
+                    "instance_id": instance_id,
+                    "port": port,
+                    "owner": owner,
+                }
+                self._send(200, "application/json; charset=utf-8", json.dumps(health).encode("utf-8"))
                 return
 
             if path == "/api/stats":
@@ -245,11 +273,31 @@ def cmd_web(args: argparse.Namespace) -> int:
         sys.stderr = stream  # type: ignore[assignment]
     host = "127.0.0.1"
     port = int(args.port)
+    inst_id = os.environ.get("AGY_USAGE_INSTANCE_ID", "").strip() or generate_instance_id()
+    owner = os.environ.get("AGY_USAGE_OWNER", "").strip() or ("daemon" if getattr(args, "daemon_log", False) else "foreground")
     try:
-        server = ReusableHTTPServer((host, port), make_handler(port))
+        server = ReusableHTTPServer((host, port), make_handler(port, instance_id=inst_id, owner=owner))
     except Exception as exc:
         print(f"启动 Web 监控台失败 (127.0.0.1:{port}): {exc}", file=sys.stderr, flush=True)
         return 1
+    if owner == "foreground":
+        try:
+            ensure_data_dir()
+            write_instance_meta(
+                {
+                    "service": SERVICE_NAME,
+                    "protocol_version": PROTOCOL_VERSION,
+                    "version": APP_VERSION,
+                    "instance_id": inst_id,
+                    "pid": os.getpid(),
+                    "pid_start": get_pid_start_id(os.getpid()),
+                    "host": host,
+                    "port": port,
+                    "owner": owner,
+                }
+            )
+        except OSError:
+            pass
     url = f"http://{host}:{port}"
     print(f"{GREEN}●{RESET} Antigravity 实时用量监控台已启动: {BOLD}{CYAN}{url}{RESET}", flush=True)
     print(f"  {DIM}仅监听本机 127.0.0.1 · 按 Ctrl+C 停止服务{RESET}", flush=True)
@@ -264,71 +312,132 @@ def cmd_web(args: argparse.Namespace) -> int:
         print("\n已停止 Web 监控台。")
     finally:
         server.server_close()
+        if owner == "foreground":
+            cur = read_instance_meta()
+            if cur and cur.get("instance_id") == inst_id:
+                remove_instance_meta()
     return 0
+
+
+def _stop_recorded_instance() -> Tuple[bool, Optional[int]]:
+    """Stop only the verified instance recorded in daemon_instance.json (never blindly kill foreign PIDs)."""
+    meta = read_instance_meta()
+    if not meta:
+        PID_FILE.unlink(missing_ok=True)
+        return False, None
+    pid = int(meta.get("pid") or 0)
+    pid_start = str(meta.get("pid_start") or "")
+    stopped = stop_verified_pid(pid, expected_pid_start=pid_start)
+    if stopped:
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and _pid_alive(pid):
+            time.sleep(0.05)
+    remove_instance_meta()
+    PID_FILE.unlink(missing_ok=True)
+    return stopped, pid if stopped else None
 
 
 def cmd_daemon(args: argparse.Namespace) -> int:
     ensure_data_dir()
     port = int(args.port)
     action = args.action
-    pid = _read_pid()
 
     if action == "status":
-        if pid:
-            print(f"{GREEN}● 运行中{RESET} (PID {pid}) -> http://127.0.0.1:{port}")
+        ok, meta = verify_live_instance(expected_port=port)
+        if ok and meta:
+            print(f"{GREEN}● 运行中{RESET} (PID {meta['pid']}, owner={meta.get('owner', 'daemon')}) -> http://127.0.0.1:{port}")
         else:
             print(f"{DIM}○ 未运行{RESET}")
         return 0
 
-    if action == "stop":
-        if not pid:
-            print("后台看板未在运行。")
-            PID_FILE.unlink(missing_ok=True)
-            return 0
-        _stop_pid(pid)
-        time.sleep(0.3)
-        PID_FILE.unlink(missing_ok=True)
-        print(f"{GREEN}✓ 已停止后台看板{RESET} (PID {pid})")
-        return 0
-
-    if action in ("start", "restart"):
-        if pid:
-            if action == "start":
-                print(f"{GREEN}● 后台看板已在运行{RESET} (PID {pid}) -> http://127.0.0.1:{port}")
-                if not args.no_open:
-                    webbrowser.open(f"http://127.0.0.1:{port}")
-                return 0
-            _stop_pid(pid)
-            time.sleep(0.4)
-            PID_FILE.unlink(missing_ok=True)
-
-        rotate_web_log()
-        py_exe = sys.executable
-        popen_kwargs: Dict[str, Any] = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
-        if os.name == "nt":
-            pyw = Path(py_exe).with_name("pythonw.exe")
-            if pyw.exists():
-                py_exe = str(pyw)
-            popen_kwargs["creationflags"] = 0x00000008 | 0x00000200
-        else:
-            popen_kwargs["start_new_session"] = True
-
-        proc = subprocess.Popen(
-            [py_exe, str(APP_DIR / "cli.py"), "web", "--port", str(port), "--no-open", "--daemon-log"],
-            **popen_kwargs,
-        )
-        PID_FILE.write_text(str(proc.pid), encoding="utf-8")
-        time.sleep(0.5)
-        if proc.poll() is not None:
-            PID_FILE.unlink(missing_ok=True)
-            print(f"{RED}✖ 后台启动失败（端口 {port} 可能被占用），请查看 {LOG_FILE}{RESET}", file=sys.stderr)
+    with daemon_transaction_lock(timeout=5.0) as locked:
+        if not locked:
+            print(f"{RED}✖ 无法获取单实例锁（可能有另一个启动/停止操作正在进行）{RESET}", file=sys.stderr)
             return 1
-        url = f"http://127.0.0.1:{port}"
-        print(f"{GREEN}✓ 已在后台启动监控台{RESET} (PID {proc.pid}) -> {BOLD}{CYAN}{url}{RESET}")
-        if not args.no_open:
-            try:
-                webbrowser.open(url)
-            except Exception:
-                pass
-        return 0
+
+        if action == "stop":
+            stopped, stopped_pid = _stop_recorded_instance()
+            if not stopped:
+                print("后台看板未在运行。")
+                return 0
+            print(f"{GREEN}✓ 已停止后台看板{RESET} (PID {stopped_pid})")
+            return 0
+
+        if action in ("start", "restart"):
+            ok, meta = verify_live_instance(expected_port=port)
+            if ok and meta:
+                if action == "start":
+                    print(f"{GREEN}● 后台看板已在运行{RESET} (PID {meta['pid']}) -> http://127.0.0.1:{port}")
+                    if not args.no_open:
+                        try:
+                            webbrowser.open(f"http://127.0.0.1:{port}")
+                        except Exception:
+                            pass
+                    return 0
+                _stop_recorded_instance()
+            else:
+                # Clear stale metadata without killing any unrelated process
+                if read_instance_meta():
+                    remove_instance_meta()
+                PID_FILE.unlink(missing_ok=True)
+
+            if is_port_in_use("127.0.0.1", port):
+                print(
+                    f"{RED}✖ 端口 127.0.0.1:{port} 已被其他非本工具服务占用，已安全中止（绝不强杀外部进程）。请用 --port 指定其他端口。{RESET}",
+                    file=sys.stderr,
+                )
+                return 1
+
+            rotate_web_log()
+            inst_id = generate_instance_id()
+            py_exe = sys.executable
+            child_env = dict(os.environ)
+            child_env["AGY_USAGE_INSTANCE_ID"] = inst_id
+            child_env["AGY_USAGE_OWNER"] = "daemon"
+
+            popen_kwargs: Dict[str, Any] = {
+                "stdout": subprocess.DEVNULL,
+                "stderr": subprocess.DEVNULL,
+                "env": child_env,
+            }
+            if os.name == "nt":
+                pyw = Path(py_exe).with_name("pythonw.exe")
+                if pyw.exists():
+                    py_exe = str(pyw)
+                popen_kwargs["creationflags"] = 0x00000008 | 0x00000200
+            else:
+                popen_kwargs["start_new_session"] = True
+
+            proc = subprocess.Popen(
+                [py_exe, str(APP_DIR / "cli.py"), "web", "--port", str(port), "--no-open", "--daemon-log"],
+                **popen_kwargs,
+            )
+            if not wait_for_ready_handshake("127.0.0.1", port, inst_id, proc, timeout=4.0):
+                stop_verified_pid(proc.pid)
+                remove_instance_meta()
+                PID_FILE.unlink(missing_ok=True)
+                print(f"{RED}✖ 后台启动握手失败（端口 {port}），请查看 {LOG_FILE}{RESET}", file=sys.stderr)
+                return 1
+
+            meta_rec = {
+                "service": SERVICE_NAME,
+                "protocol_version": PROTOCOL_VERSION,
+                "version": APP_VERSION,
+                "instance_id": inst_id,
+                "pid": proc.pid,
+                "pid_start": get_pid_start_id(proc.pid),
+                "host": "127.0.0.1",
+                "port": port,
+                "owner": "daemon",
+            }
+            write_instance_meta(meta_rec)
+            PID_FILE.write_text(str(proc.pid), encoding="utf-8")
+            url = f"http://127.0.0.1:{port}"
+            print(f"{GREEN}✓ 已在后台启动监控台{RESET} (PID {proc.pid}) -> {BOLD}{CYAN}{url}{RESET}")
+            if not args.no_open:
+                try:
+                    webbrowser.open(url)
+                except Exception:
+                    pass
+            return 0
     return 0

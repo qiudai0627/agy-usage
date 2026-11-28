@@ -188,7 +188,7 @@ def build_insights(
     return insights[:4]
 
 
-def build_analytics(window: str = "7d") -> Dict[str, Any]:
+def build_analytics(window: str = "7d", *, dispatch_notifications: bool = True) -> Dict[str, Any]:
     now = datetime.now(timezone.utc)
     local_tz = get_local_tz()
     tz_label = get_tz_label()
@@ -207,6 +207,7 @@ def build_analytics(window: str = "7d") -> Dict[str, Any]:
         hour=0, minute=0, second=0, microsecond=0
     ).astimezone(timezone.utc)
     start_7d = now - timedelta(days=7)
+    start_30d = now - timedelta(days=30)
 
     win_map = {
         "5h": start_5h,
@@ -214,6 +215,7 @@ def build_analytics(window: str = "7d") -> Dict[str, Any]:
         "24h": start_24h,
         "week": monday_cst,
         "7d": start_7d,
+        "30d": start_30d,
         "all": datetime(1970, 1, 1, tzinfo=timezone.utc),
     }
     selected_start = win_map.get(window, start_7d)
@@ -478,7 +480,7 @@ def build_analytics(window: str = "7d") -> Dict[str, Any]:
         )
 
     quota_info = analyze_quota_buckets(live_state, snapshots, events, now)
-    notifications_info = evaluate_quota_notifications(quota_info, now=now, dispatch=True)
+    notifications_info = evaluate_quota_notifications(quota_info, now=now, dispatch=dispatch_notifications)
     week_over_week = compute_week_over_week(events, now=now, tz=local_tz)
     insights = build_insights(quota_info, windows_summary, by_pool, burn_5h, selected_summary)
 

@@ -9,7 +9,9 @@ STAGE_DIR="$(mktemp -d)"
 trap 'rm -rf "$STAGE_DIR"' EXIT
 PKG_DIR="$STAGE_DIR/agy-usage"
 mkdir -p "$PKG_DIR/src/locales" "$PKG_DIR/src/web" "$PKG_DIR/macos" "$PKG_DIR/windows" "$PKG_DIR/scripts" \
-         "$PKG_DIR/docs/assets" "$PKG_DIR/tests" "$PKG_DIR/.github/workflows"
+         "$PKG_DIR/docs/assets" "$PKG_DIR/tests" "$PKG_DIR/.github/workflows" \
+         "$PKG_DIR/plugins/agy-usage/scripts" "$PKG_DIR/plugins/agy-usage/assets" \
+         "$PKG_DIR/plugins/agy-usage/skills/agy-usage"
 
 # Explicit file manifest (never globs untracked private scripts)
 ROOT_FILES=(
@@ -35,8 +37,11 @@ SRC_FILES=(
   cli.py
   core.py
   i18n.py
+  instance_lock.py
   maintenance.py
+  mcp_server.py
   notifications.py
+  pure_query.py
   quota.py
   server.py
   statusline.py
@@ -81,12 +86,27 @@ done
 cp "$ROOT_DIR/.github/workflows/ci.yml" "$PKG_DIR/.github/workflows/ci.yml"
 cp "$ROOT_DIR/macos/MenuBarApp.swift" "$ROOT_DIR/macos/build-app.sh" "$PKG_DIR/macos/"
 cp "$ROOT_DIR/windows/tray_widget.pyw" "$PKG_DIR/windows/"
-cp "$ROOT_DIR/scripts/package-release.sh" "$PKG_DIR/scripts/"
-cp "$ROOT_DIR/tests/test_suite.py" "$PKG_DIR/tests/"
+cp "$ROOT_DIR/scripts/package-release.sh" "$ROOT_DIR/scripts/build-plugin.sh" "$PKG_DIR/scripts/"
+cp "$ROOT_DIR/tests/test_suite.py" "$ROOT_DIR/tests/test_v15_plugin.py" "$PKG_DIR/tests/"
+
+# Self-contained AGY native plugin bundle (re-synced from single-source src/)
+cp "$ROOT_DIR/plugins/agy-usage/plugin.json" \
+   "$ROOT_DIR/plugins/agy-usage/mcp_config.json" \
+   "$ROOT_DIR/plugins/agy-usage/README.md" \
+   "$PKG_DIR/plugins/agy-usage/"
+cp "$ROOT_DIR/plugins/agy-usage/skills/agy-usage/SKILL.md" \
+   "$PKG_DIR/plugins/agy-usage/skills/agy-usage/"
+cp "$ROOT_DIR/docs/assets/logo.png" "$PKG_DIR/plugins/agy-usage/assets/logo.png"
+PLUGIN_CORE_FILES=(analytics.py instance_lock.py mcp_server.py notifications.py pure_query.py quota.py storage.py transcripts.py)
+for f in "${PLUGIN_CORE_FILES[@]}"; do
+  cp "$ROOT_DIR/src/$f" "$PKG_DIR/plugins/agy-usage/scripts/$f"
+done
 
 chmod 755 "$PKG_DIR/install.sh" "$PKG_DIR/uninstall.sh" "$PKG_DIR/verify.sh" \
           "$PKG_DIR/Start-Mac.command" "$PKG_DIR/macos/build-app.sh" \
-          "$PKG_DIR/scripts/package-release.sh" "$PKG_DIR/src/"*.py "$PKG_DIR/tests/test_suite.py"
+          "$PKG_DIR/scripts/package-release.sh" "$PKG_DIR/scripts/build-plugin.sh" \
+          "$PKG_DIR/src/"*.py "$PKG_DIR/plugins/agy-usage/scripts/mcp_server.py" \
+          "$PKG_DIR/tests/test_suite.py" "$PKG_DIR/tests/test_v15_plugin.py"
 
 echo "==> 执行隐私、个人路径与凭证零泄露门禁扫描..."
 PKG_DIR="$PKG_DIR" CURRENT_USER="$(id -un)" python3 - <<'PY'

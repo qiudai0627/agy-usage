@@ -1,10 +1,10 @@
 <div align="center">
   <img src="./docs/assets/logo.png" width="84" height="84" alt="Antigravity Usage Monitor" />
   <h1>Antigravity 即時額度與用量監控台</h1>
-  <p><b>AGY Usage · 雙池四桶即時配速、Token 快取分析與多端懸浮膠囊</b></p>
+  <p><b>看懂 Antigravity 用量、雙池配速與快取健康：純本地唯讀用戶端資料、零 CDP 注入、零第三方 Python 依賴、無需帳號憑證</b></p>
 
   <p>
-    <a href="https://github.com/qiudai0627/agy-usage/releases"><img src="https://img.shields.io/badge/Release-v1.4.0-0ea5e9.svg" alt="Release" /></a>
+    <a href="https://github.com/qiudai0627/agy-usage/releases"><img src="https://img.shields.io/badge/Release-v1.5.0-0ea5e9.svg" alt="Release" /></a>
     <a href="https://github.com/qiudai0627/agy-usage/actions"><img src="https://github.com/qiudai0627/agy-usage/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
     <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-10b981.svg" alt="License: MIT" /></a>
     <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-6366f1.svg" alt="Platform" />
@@ -31,14 +31,28 @@
 - **全形態桌面與終端協同**：提供本地 Web 監控台（`127.0.0.1:18420`）、macOS 原生防瀏海毛玻璃膠囊與選單列應用、Windows 桌面迷你懸浮窗及自適應終端底欄。
 - **深度 Token 與快取洞察**：內建近 5h（10m 粒度）燃速圖、24h / 7d 堆疊趨勢、7×24 活躍熱力圖、自然週同進度環比，以及單對話逐輪上下文增長抽屜與 CSV 匯出。
 - **去識別戰報卡與智慧提醒**：內建 2× 高清去識別戰報分享卡產生器（`淺色 · 通透 · 深色`），支援去重式 80% / 95% 門檻預警與額度回血桌面通知。
-- **100% 純本地隱私架構**：免帳號登入、零雲端上傳、零外部網路請求；本地回環服務內建 `Host` / `Origin` / `Sec-Fetch-Site` 安全校驗。
-- **零第三方執行期依賴**：基於 Python 3.9+ 標準庫（`O(1)` 單對話增量分片索引）與原生 Swift / `tkinter`，Web 介面內建 11 國語言一鍵切換。
+- **官方原生 AGY 外掛與三層清晰邊界**：內建自包含 `plugins/agy-usage/`（`/agy-usage` Skill + 4 工具零依賴 `stdio` MCP Server），零 CDP 注入、不改用戶端磁碟檔案、安裝無預設副作用。
+- **零第三方執行期依賴**：基於 Python 3.9+ 標準庫（`O(1)` 單對話增量分片索引 + 跨平台單實例鎖與身份握手）與原生 Swift / `tkinter`，Web 介面內建 11 國語言一鍵切換。
+
+## 三層資料與安全邊界（透明揭露）
+
+| 層級 | 範圍與行為說明 |
+| :--- | :--- |
+| **1. 用戶端資料層（純唯讀、零侵入）** | 僅唯讀解析本地 Antigravity 日誌與狀態檔；無 CDP 注入、無 `--remote-debugging-port`、不修改用戶端磁碟檔案、不讀取帳號/OAuth 憑證。 |
+| **2. 本工具自有本地狀態層** | 自有快取、偏好與日誌保存在 `~/.cache/agy-usage/`（Windows 為 `%LOCALAPPDATA%\agy-usage\`）；官方原生外掛安裝零預設副作用，CLI 安裝腳本僅在使用者執行或明確確認時寫入可逆的終端底欄設定。 |
+| **3. MCP 對話上下文層** | 啟用原生外掛 MCP 時，去識別聚合指標（不含對話標題、正文、preview、本地路徑與原始對話 ID）會回傳並進入宿主模型對話上下文。 |
 
 ## 快速安裝
 
 環境需求：已安裝 **Google Antigravity** 與 **Python 3.9+**（macOS 原生懸浮膠囊可選裝 `xcode-select --install`）。
 
-### macOS / Linux
+### 方式一：官方原生 AGY 外掛（零預設副作用，含 `/agy-usage` 與 4 唯讀 MCP 工具）
+
+```bash
+agy plugin install https://github.com/qiudai0627/agy-usage/tree/main/plugins/agy-usage
+```
+
+### 方式二：完整桌面與終端監控套件（macOS / Linux）
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.sh | bash

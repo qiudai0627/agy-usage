@@ -20,7 +20,7 @@ from storage import (
 )
 from transcripts import load_agy_settings, load_transcript_events
 
-SCHEMA_VERSION = "1.5.0"
+SCHEMA_VERSION = "1.5.1"
 VALID_SUMMARY_WINDOWS = ("today", "7d", "30d")
 MAX_SUMMARY_BYTES = 2048
 MAX_QUOTA_BYTES = 1024

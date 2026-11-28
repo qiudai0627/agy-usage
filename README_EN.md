@@ -4,7 +4,7 @@
   <p><b>Read-Only Local Quota &amp; Token Monitor for Antigravity · Official Native Plugin</b></p>
 
   <p>
-    <a href="https://github.com/qiudai0627/agy-usage/releases"><img src="https://img.shields.io/badge/Release-v1.5.0-0ea5e9.svg" alt="Release" /></a>
+    <a href="https://github.com/qiudai0627/agy-usage/releases"><img src="https://img.shields.io/badge/Release-v1.5.1-0ea5e9.svg" alt="Release" /></a>
     <a href="https://github.com/qiudai0627/agy-usage/actions"><img src="https://github.com/qiudai0627/agy-usage/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
     <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-10b981.svg" alt="License: MIT" /></a>
     <img src="https://img.shields.io/badge/Client-Zero%20CDP%20Injection-0d9488.svg" alt="Zero CDP Injection" />
@@ -71,6 +71,8 @@ irm https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.ps1 | ie
 ```
 
 > **GUI Archive Option**: Download the latest archive from [Releases](https://github.com/qiudai0627/agy-usage/releases), extract it, and open `Start-Mac.command` (macOS) or `Start-Windows.bat` (Windows). Open a new Antigravity session (or paste the one-line activation command shown in the dashboard header into an open session) to begin live quota streaming.
+
+> **How to Upgrade (Zero Silent Auto-Update)**: Run `brew upgrade agy-usage` (Homebrew), re-run `agy plugin install` (native plugin), or re-run the install script (preserves all local data). Desktop pill menus also display the current version with a manual **Check for Updates…** option.
 
 ## Desktop & Terminal Surfaces
 

@@ -66,10 +66,6 @@ done
 
 ASSET_FILES=(
   logo.png
-  dashboard-preview-zh.png
-  dashboard-preview-en.png
-  share-card-zh.png
-  share-card-en.png
   overview-4buckets.svg
   overview-4buckets-en.svg
   themes-3way.svg

@@ -4,7 +4,7 @@
   <p><b>Antigravity 本地只读额度与用量监控台 · 官方原生插件</b></p>
 
   <p>
-    <a href="https://github.com/qiudai0627/agy-usage/releases"><img src="https://img.shields.io/badge/Release-v1.5.0-0ea5e9.svg" alt="Release" /></a>
+    <a href="https://github.com/qiudai0627/agy-usage/releases"><img src="https://img.shields.io/badge/Release-v1.5.1-0ea5e9.svg" alt="Release" /></a>
     <a href="https://github.com/qiudai0627/agy-usage/actions"><img src="https://github.com/qiudai0627/agy-usage/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
     <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-10b981.svg" alt="License: MIT" /></a>
     <img src="https://img.shields.io/badge/Client-Zero%20CDP%20Injection-0d9488.svg" alt="Zero CDP Injection" />
@@ -71,6 +71,8 @@ irm https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.ps1 | ie
 ```
 
 > **免命令行方式**：前往 [Releases](https://github.com/qiudai0627/agy-usage/releases) 下载压缩包解压，macOS 右键打开 `Start-Mac.command`，Windows 双击 `Start-Windows.bat`。安装后新开一个 Antigravity 会话（或将监控台顶栏提示的激活口令粘贴至当前会话）即可同步实时额度。
+
+> **如何平滑升级（零静默联网）**：Homebrew 用户执行 `brew upgrade agy-usage`；原生插件用户重新执行 `agy plugin install`；脚本用户重跑安装命令即可原地无损升级（保留全部历史数据）。桌面胶囊菜单底部也可随时查看当前版本并手动点击 **「检查更新…」**。
 
 ## 多端形态预览
 

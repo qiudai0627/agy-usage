@@ -823,6 +823,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
+        let appVer = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "1.5.1"
+        menu.addItem(makeDisabledItem("AGY Usage v\(appVer)"))
+
+        let updateItem = NSMenuItem(title: tr("检查更新…", "檢查更新…", "Check for Updates…"), action: #selector(checkForUpdates), keyEquivalent: "")
+        updateItem.target = self
+        menu.addItem(updateItem)
+
         let quitItem = NSMenuItem(title: tr("退出小工具", "結束小工具", "Quit"), action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
@@ -948,6 +955,64 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         rebuildMenu()
+    }
+
+    @objc private func checkForUpdates() {
+        let current = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "1.5.1"
+        guard let url = URL(string: "https://api.github.com/repos/qiudai0627/agy-usage/releases/latest") else { return }
+        var req = URLRequest(url: url, timeoutInterval: 8.0)
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.setValue("agy-usage/\(current)", forHTTPHeaderField: "User-Agent")
+        URLSession.shared.dataTask(with: req) { [weak self] data, _, error in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                let alert = NSAlert()
+                alert.alertStyle = .informational
+                if let error = error {
+                    alert.messageText = self.tr("检查更新失败", "檢查更新失敗", "Update Check Failed")
+                    alert.informativeText = error.localizedDescription
+                    alert.addButton(withTitle: self.tr("好", "好", "OK"))
+                    NSApp.activate(ignoringOtherApps: true)
+                    alert.runModal()
+                    return
+                }
+                guard let data = data,
+                      let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let rawTag = obj["tag_name"] as? String else {
+                    alert.messageText = self.tr("无法解析最新版本信息", "無法解析最新版本資訊", "Could Not Parse Release Info")
+                    alert.addButton(withTitle: self.tr("好", "好", "OK"))
+                    NSApp.activate(ignoringOtherApps: true)
+                    alert.runModal()
+                    return
+                }
+                let latest = rawTag.hasPrefix("v") ? String(rawTag.dropFirst()) : rawTag
+                let releaseURLStr = (obj["html_url"] as? String) ?? "https://github.com/qiudai0627/agy-usage/releases/latest"
+                if latest.compare(current, options: .numeric) == .orderedDescending {
+                    alert.messageText = self.tr("发现新版本 v\(latest)", "發現新版本 v\(latest)", "New Version Available: v\(latest)")
+                    alert.informativeText = self.tr(
+                        "当前版本：v\(current)\n最新版本：v\(latest)\n\n可通过 Homebrew（brew upgrade agy-usage）或重跑安装命令平滑升级。",
+                        "目前版本：v\(current)\n最新版本：v\(latest)\n\n可透過 Homebrew（brew upgrade agy-usage）或重跑安裝指令平滑升級。",
+                        "Current: v\(current)\nLatest: v\(latest)\n\nUpgrade cleanly via `brew upgrade agy-usage` or by re-running the install script."
+                    )
+                    alert.addButton(withTitle: self.tr("打开发布页", "開啟發佈頁", "Open Release Page"))
+                    alert.addButton(withTitle: self.tr("稍后", "稍後", "Later"))
+                    NSApp.activate(ignoringOtherApps: true)
+                    if alert.runModal() == .alertFirstButtonReturn, let rurl = URL(string: releaseURLStr) {
+                        NSWorkspace.shared.open(rurl)
+                    }
+                } else {
+                    alert.messageText = self.tr("已是最新版本", "已是最新版本", "You're Up to Date")
+                    alert.informativeText = self.tr(
+                        "当前已运行最新版本 AGY Usage v\(current)。",
+                        "目前已執行最新版本 AGY Usage v\(current)。",
+                        "AGY Usage v\(current) is the latest version."
+                    )
+                    alert.addButton(withTitle: self.tr("好", "好", "OK"))
+                    NSApp.activate(ignoringOtherApps: true)
+                    alert.runModal()
+                }
+            }
+        }.resume()
     }
 
     @objc private func quitApp() {

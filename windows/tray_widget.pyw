@@ -486,6 +486,56 @@ def main() -> int:
         quit_btn.configure(text=_wtr(lg, "退出小工具", "結束小工具", "Quit"))
         apply_data(state.get("last_data"))
 
+    def check_updates() -> None:
+        from tkinter import messagebox
+
+        current = "1.5.1"
+        lg = _resolved_lang(state["lang_pref"])
+
+        def worker() -> None:
+            try:
+                req = urllib.request.Request(
+                    "https://api.github.com/repos/qiudai0627/agy-usage/releases/latest",
+                    headers={"Accept": "application/vnd.github+json", "User-Agent": f"agy-usage/{current}"},
+                )
+                with urllib.request.urlopen(req, timeout=8.0) as resp:
+                    obj = json.loads(resp.read(32768).decode("utf-8", errors="replace"))
+                tag = str(obj.get("tag_name") or "").lstrip("v")
+                html_url = str(obj.get("html_url") or "https://github.com/qiudai0627/agy-usage/releases/latest")
+                cur_t = tuple(int(x) for x in current.split(".") if x.isdigit())
+                lat_t = tuple(int(x) for x in tag.split(".") if x.isdigit())
+                if tag and lat_t > cur_t:
+                    def _ask() -> None:
+                        if messagebox.askyesno(
+                            _wtr(lg, f"发现新版本 v{tag}", f"發現新版本 v{tag}", f"New Version v{tag}"),
+                            _wtr(
+                                lg,
+                                f"当前版本：v{current}\n最新版本：v{tag}\n\n是否打开 GitHub Release 页面查看更新？",
+                                f"目前版本：v{current}\n最新版本：v{tag}\n\n是否開啟 GitHub Release 頁面查看更新？",
+                                f"Current: v{current}\nLatest: v{tag}\n\nOpen the GitHub Release page?",
+                            ),
+                        ):
+                            webbrowser.open(html_url)
+                    root.after(0, _ask)
+                else:
+                    root.after(
+                        0,
+                        lambda: messagebox.showinfo(
+                            _wtr(lg, "已是最新版本", "已是最新版本", "Up to Date"),
+                            _wtr(lg, f"当前已是最新版本 AGY Usage v{current}。", f"目前已是最新版本 AGY Usage v{current}。", f"AGY Usage v{current} is up to date."),
+                        ),
+                    )
+            except Exception as exc:
+                root.after(
+                    0,
+                    lambda: messagebox.showerror(
+                        _wtr(lg, "检查更新失败", "檢查更新失敗", "Update Check Failed"),
+                        str(exc),
+                    ),
+                )
+
+        threading.Thread(target=worker, daemon=True).start()
+
     ctx_menu = tk.Menu(root, tearoff=0)
     ctx_menu.add_command(label="Expand / Collapse (双击展开)", command=toggle_expand)
     ctx_menu.add_command(label="Open Web Dashboard (打开监控台)", command=open_web)
@@ -502,6 +552,8 @@ def main() -> int:
     ctx_menu.add_command(label="Language · 繁體中文", command=lambda: set_lang_pref("zh-TW"))
     ctx_menu.add_command(label="Language · English", command=lambda: set_lang_pref("en"))
     ctx_menu.add_separator()
+    ctx_menu.add_command(label="AGY Usage v1.5.1", state="disabled")
+    ctx_menu.add_command(label="Check for Updates… / 检查更新…", command=check_updates)
     ctx_menu.add_command(label="Quit / 退出悬浮小工具", command=quit_widget)
 
     init_lg = _resolved_lang(state["lang_pref"])

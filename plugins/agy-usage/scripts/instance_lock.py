@@ -20,7 +20,7 @@ from storage import DATA_DIR, atomic_write_text, file_lock
 
 SERVICE_NAME = "agy-usage-dashboard"
 PROTOCOL_VERSION = 1
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.5.1"
 
 DAEMON_LOCK_FILE = DATA_DIR / "daemon.lock"
 INSTANCE_META_FILE = DATA_DIR / "daemon_instance.json"

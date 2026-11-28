@@ -196,7 +196,7 @@ class TestV15Gates(unittest.TestCase):
     def test_g03_plugin_manifest_structure(self) -> None:
         manifest = json.loads((PLUGIN_DIR / "plugin.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "agy-usage")
-        self.assertEqual(manifest["version"], "1.5.0")
+        self.assertEqual(manifest["version"], "1.5.1")
         mcp_cfg = json.loads((PLUGIN_DIR / "mcp_config.json").read_text(encoding="utf-8"))
         self.assertEqual(list(mcp_cfg["mcpServers"].keys()), ["quota"])
         self.assertFalse((PLUGIN_DIR / "hooks.json").exists())

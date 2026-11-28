@@ -216,5 +216,7 @@
   "sc_cld_lbl": "● Claude 週間枠",
   "sc_net_tok": "実効トークン",
   "sc_tag_sub": "完全ローカル · Macノッチ対応ピル · Winウィジェット · 11言語対応",
-  "sc_post_tpl": "Google Antigravity のローカル使用量レポート（{0}）：累計 {1} トークン処理（キャッシュ率 {2}%）！Gemini / Claude の5時間・週間枠とリセット時間をMac右上ピル＆Webでリアルタイム監視できるゼロ依存ツール：\nhttps://github.com/qiudai0627/agy-usage\n\nMac導入：curl -fsSL https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.sh | bash\nWin導入：irm https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.ps1 | iex"
+  "sc_post_tpl": "Google Antigravity のローカル使用量レポート（{0}）：累計 {1} トークン処理（キャッシュ率 {2}%）！Gemini / Claude の5時間・週間枠とリセット時間をMac右上ピル＆Webでリアルタイム監視できるゼロ依存ツール：\nhttps://github.com/qiudai0627/agy-usage\n\nMac導入：curl -fsSL https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.sh | bash\nWin導入：irm https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.ps1 | iex",
+  "trust_badge": "🛡️ ローカル読取専用 · 注入なし",
+  "trust_tip": "クライアントデータは読取専用 · CDP注入なし · 外部Python依存なし · 認証情報不要"
 }

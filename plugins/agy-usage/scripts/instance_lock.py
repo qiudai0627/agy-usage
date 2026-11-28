@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import ctypes
+import http.client
 import json
 import os
 from pathlib import Path
@@ -14,7 +15,6 @@ import subprocess
 import sys
 import time
 from typing import Any, Dict, Optional, Tuple
-from urllib.request import Request, urlopen
 
 from storage import DATA_DIR, atomic_write_text, file_lock
 
@@ -145,17 +145,25 @@ def remove_instance_meta(meta_file: Path = INSTANCE_META_FILE) -> None:
 
 
 def fetch_health_identity(host: str, port: int, timeout: float = 0.6) -> Optional[Dict[str, Any]]:
-    url = f"http://{host}:{port}/api/health"
-    req = Request(url, headers={"Host": f"{host}:{port}", "Accept": "application/json"})
+    """Query loopback /api/health directly via http.client (bypasses OS proxy auto-detection)."""
+    conn: Optional[http.client.HTTPConnection] = None
     try:
-        with urlopen(req, timeout=timeout) as resp:
-            if resp.status != 200:
-                return None
-            raw = resp.read(4096).decode("utf-8", errors="replace")
-            data = json.loads(raw)
-            return data if isinstance(data, dict) else None
+        conn = http.client.HTTPConnection(host, port, timeout=timeout)
+        conn.request("GET", "/api/health", headers={"Host": f"{host}:{port}", "Accept": "application/json"})
+        resp = conn.getresponse()
+        if resp.status != 200:
+            return None
+        raw = resp.read(4096).decode("utf-8", errors="replace")
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else None
     except Exception:
         return None
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def is_port_in_use(host: str, port: int, timeout: float = 0.25) -> bool:
@@ -217,7 +225,7 @@ def wait_for_ready_handshake(
     instance_id: str,
     proc: subprocess.Popen,
     *,
-    timeout: float = 4.0,
+    timeout: float = 8.0,
 ) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:

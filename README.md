@@ -1,15 +1,15 @@
 <div align="center">
   <img src="./docs/assets/logo.png" width="84" height="84" alt="Antigravity Usage Monitor" />
   <h1>Antigravity 实时额度与用量监控台</h1>
-  <p><b>看懂 Antigravity 用量、双池配速与缓存健康：纯本地只读客户端数据、零 CDP 注入、零第三方 Python 依赖、无需账号凭据</b></p>
+  <p><b>Antigravity 本地只读额度与用量监控台 · 官方原生插件</b></p>
 
   <p>
     <a href="https://github.com/qiudai0627/agy-usage/releases"><img src="https://img.shields.io/badge/Release-v1.5.0-0ea5e9.svg" alt="Release" /></a>
     <a href="https://github.com/qiudai0627/agy-usage/actions"><img src="https://github.com/qiudai0627/agy-usage/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
     <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-10b981.svg" alt="License: MIT" /></a>
-    <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-6366f1.svg" alt="Platform" />
+    <img src="https://img.shields.io/badge/Client-Zero%20CDP%20Injection-0d9488.svg" alt="Zero CDP Injection" />
     <img src="https://img.shields.io/badge/Dependencies-Zero%20(Python%203.9%2B)-8b5cf6.svg" alt="Zero Dependencies" />
-    <img src="https://img.shields.io/badge/i18n-11%20Languages-f59e0b.svg" alt="11 Languages" />
+    <img src="https://img.shields.io/badge/Web%20UI-11%20Languages-f59e0b.svg" alt="Web UI 11 Languages" />
   </p>
 
   <p>
@@ -18,11 +18,11 @@
 </div>
 
 <p align="center">
-  <img src="./docs/assets/overview-4buckets.svg" width="100%" alt="AGY Usage Dashboard Overview" />
+  <img src="./docs/assets/dashboard-preview-zh.png" width="100%" alt="AGY Usage Dashboard" />
 </p>
 
 <p align="center">
-  <img src="./docs/assets/themes-3way.svg" width="100%" alt="Light · Airy · Dark Themes" />
+  <img src="./docs/assets/share-card-zh.png" width="80%" alt="AGY Usage 2x Retina Bento Share Card" />
 </p>
 
 ## 核心特性

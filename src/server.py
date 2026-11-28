@@ -412,7 +412,7 @@ def cmd_daemon(args: argparse.Namespace) -> int:
                 [py_exe, str(APP_DIR / "cli.py"), "web", "--port", str(port), "--no-open", "--daemon-log"],
                 **popen_kwargs,
             )
-            if not wait_for_ready_handshake("127.0.0.1", port, inst_id, proc, timeout=4.0):
+            if not wait_for_ready_handshake("127.0.0.1", port, inst_id, proc, timeout=8.0):
                 stop_verified_pid(proc.pid)
                 remove_instance_meta()
                 PID_FILE.unlink(missing_ok=True)

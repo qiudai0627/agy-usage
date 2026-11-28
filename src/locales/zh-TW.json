@@ -216,5 +216,7 @@
   "sc_cld_lbl": "● Claude 週額度",
   "sc_net_tok": "有效淨消耗",
   "sc_tag_sub": "本機零上傳 · Mac 防瀏海膠囊 · Win 小工具 · 11 國語言",
-  "sc_post_tpl": "剛用本機小工具看了下我的 Antigravity 戰報：{0}累計吞吐 {1} Tokens（快取命中率 {2}%）！支援 Gemini / Claude 雙池獨立倒數、Mac 右上角半透明小膠囊、Win 桌面小工具與 11 國語言，零依賴純本機執行：\nhttps://github.com/qiudai0627/agy-usage\n\nMac 一鍵安裝：curl -fsSL https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.sh | bash\nWin 一鍵安裝：irm https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.ps1 | iex"
+  "sc_post_tpl": "剛用本機小工具看了下我的 Antigravity 戰報：{0}累計吞吐 {1} Tokens（快取命中率 {2}%）！支援 Gemini / Claude 雙池獨立倒數、Mac 右上角半透明小膠囊、Win 桌面小工具與 11 國語言，零依賴純本機執行：\nhttps://github.com/qiudai0627/agy-usage\n\nMac 一鍵安裝：curl -fsSL https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.sh | bash\nWin 一鍵安裝：irm https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.ps1 | iex",
+  "trust_badge": "🛡️ 本地唯讀 · 零注入",
+  "trust_tip": "僅唯讀本地用戶端資料 · 零 CDP 注入 · 零第三方 Python 依賴 · 無需帳號憑證"
 }

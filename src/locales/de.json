@@ -216,5 +216,7 @@
   "sc_cld_lbl": "● Claude Woche",
   "sc_net_tok": "Netto-Tokens",
   "sc_tag_sub": "100% Lokal · Mac-Pille · Win-Widget · 11 Sprachen",
-  "sc_post_tpl": "Meine Google Antigravity Bilanz ({0}): {1} Tokens ({2}% Cache-Hit)! Lokaler Monitor ohne Abhängigkeiten für Gemini & Claude Kontingente:\nhttps://github.com/qiudai0627/agy-usage\n\nMac: curl -fsSL https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.sh | bash\nWin: irm https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.ps1 | iex"
+  "sc_post_tpl": "Meine Google Antigravity Bilanz ({0}): {1} Tokens ({2}% Cache-Hit)! Lokaler Monitor ohne Abhängigkeiten für Gemini & Claude Kontingente:\nhttps://github.com/qiudai0627/agy-usage\n\nMac: curl -fsSL https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.sh | bash\nWin: irm https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.ps1 | iex",
+  "trust_badge": "🛡️ Nur-Lesen · Keine Injektion",
+  "trust_tip": "Nur lokaler Lesezugriff · Keine CDP-Injektion · Keine Python-Abhängigkeiten · Keine Zugangsdaten"
 }

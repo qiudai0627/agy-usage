@@ -216,5 +216,7 @@
   "sc_cld_lbl": "● Claude Неделя",
   "sc_net_tok": "Чистые токены",
   "sc_tag_sub": "100% локально · Капсула Mac · Виджет Win · 11 языков",
-  "sc_post_tpl": "Моя статистика Google Antigravity ({0}): {1} токенов ({2}% кэш)! Локальный монитор квот Gemini и Claude без зависимостей:\nhttps://github.com/qiudai0627/agy-usage\n\nMac: curl -fsSL https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.sh | bash\nWin: irm https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.ps1 | iex"
+  "sc_post_tpl": "Моя статистика Google Antigravity ({0}): {1} токенов ({2}% кэш)! Локальный монитор квот Gemini и Claude без зависимостей:\nhttps://github.com/qiudai0627/agy-usage\n\nMac: curl -fsSL https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.sh | bash\nWin: irm https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.ps1 | iex",
+  "trust_badge": "🛡️ Только чтение · Без инъекций",
+  "trust_tip": "Только локальное чтение · Без CDP-инъекций · Без сторонних зависимостей Python · Без учётных данных"
 }

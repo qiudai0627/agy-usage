@@ -216,5 +216,7 @@
   "sc_cld_lbl": "● Claude 周额度",
   "sc_net_tok": "有效净消耗",
   "sc_tag_sub": "本地零上传 · Mac 防刘海胶囊 · Win 小组件 · 11 国语言",
-  "sc_post_tpl": "刚用本地小工具看了下我的 Antigravity 战报：{0}累计吞吐 {1} Tokens（缓存命中率 {2}%）！支持 Gemini / Claude 双池独立倒计时、Mac 右上角半透明小胶囊、Win 桌面小组件与 11 国语言，零依赖纯本地运行：\nhttps://github.com/qiudai0627/agy-usage\n\nMac 一键安装：curl -fsSL https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.sh | bash\nWin 一键安装：irm https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.ps1 | iex"
+  "sc_post_tpl": "刚用本地小工具看了下我的 Antigravity 战报：{0}累计吞吐 {1} Tokens（缓存命中率 {2}%）！支持 Gemini / Claude 双池独立倒计时、Mac 右上角半透明小胶囊、Win 桌面小组件与 11 国语言，零依赖纯本地运行：\nhttps://github.com/qiudai0627/agy-usage\n\nMac 一键安装：curl -fsSL https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.sh | bash\nWin 一键安装：irm https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.ps1 | iex",
+  "trust_badge": "🛡️ 本地只读 · 零注入",
+  "trust_tip": "仅只读本地客户端数据 · 零 CDP 注入 · 零第三方 Python 依赖 · 无需账号凭据"
 }

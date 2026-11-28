@@ -216,5 +216,7 @@
   "sc_cld_lbl": "● Claude Semanal",
   "sc_net_tok": "Tokens Efectivos",
   "sc_tag_sub": "100% Local · Cápsula Mac · Widget Win · 11 Idiomas",
-  "sc_post_tpl": "Mis estadísticas en Google Antigravity ({0}): ¡{1} tokens procesados ({2}% caché)! Monitor local sin dependencias para cuotas Gemini/Claude 5h y semanales:\nhttps://github.com/qiudai0627/agy-usage\n\nMac: curl -fsSL https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.sh | bash\nWin: irm https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.ps1 | iex"
+  "sc_post_tpl": "Mis estadísticas en Google Antigravity ({0}): ¡{1} tokens procesados ({2}% caché)! Monitor local sin dependencias para cuotas Gemini/Claude 5h y semanales:\nhttps://github.com/qiudai0627/agy-usage\n\nMac: curl -fsSL https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.sh | bash\nWin: irm https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.ps1 | iex",
+  "trust_badge": "🛡️ Solo lectura · Sin inyección",
+  "trust_tip": "Solo lectura de datos locales · Sin inyección CDP · Sin dependencias Python · Sin credenciales"
 }

@@ -216,5 +216,7 @@
   "sc_cld_lbl": "● Claude Tuần",
   "sc_net_tok": "Token Thực",
   "sc_tag_sub": "100% Cục Bộ · Viên Thuốc Mac · Widget Win · 11 Ngôn Ngữ",
-  "sc_post_tpl": "Thống kê Google Antigravity ({0}): {1} tokens ({2}% cache)! Công cụ cục bộ theo dõi hạn mức Gemini & Claude 5h/tuần:\nhttps://github.com/qiudai0627/agy-usage\n\nMac: curl -fsSL https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.sh | bash\nWin: irm https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.ps1 | iex"
+  "sc_post_tpl": "Thống kê Google Antigravity ({0}): {1} tokens ({2}% cache)! Công cụ cục bộ theo dõi hạn mức Gemini & Claude 5h/tuần:\nhttps://github.com/qiudai0627/agy-usage\n\nMac: curl -fsSL https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.sh | bash\nWin: irm https://raw.githubusercontent.com/qiudai0627/agy-usage/main/install.ps1 | iex",
+  "trust_badge": "🛡️ Chỉ đọc cục bộ · Không tiêm mã",
+  "trust_tip": "Chỉ đọc dữ liệu cục bộ · Không tiêm CDP · Không phụ thuộc Python ngoài · Không cần thông tin đăng nhập"
 }

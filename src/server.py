@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import socketserver
 import json
 import os
 from pathlib import Path
@@ -264,6 +265,13 @@ class LockedLogStream:
 
 class ReusableHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
+
+    def server_bind(self) -> None:
+        # Skip HTTPServer's socket.getfqdn() reverse-DNS lookup (can stall 30s+ on macOS VPN/CI networks)
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = str(host)
+        self.server_port = int(port)
 
 
 def cmd_web(args: argparse.Namespace) -> int:

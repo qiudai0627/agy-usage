@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from http.server import BaseHTTPRequestHandler, HTTPServer
+import socketserver
 import json
 import os
 from pathlib import Path
@@ -212,8 +213,14 @@ class TestV15Gates(unittest.TestCase):
                 self.end_headers()
                 self.wfile.write(b'{"service":"unrelated-app"}')
 
+        class FastHTTPServer(HTTPServer):
+            def server_bind(self) -> None:
+                socketserver.TCPServer.server_bind(self)
+                self.server_name = str(self.server_address[0])
+                self.server_port = int(self.server_address[1])
+
         foreign_port = _free_port()
-        foreign_srv = HTTPServer(("127.0.0.1", foreign_port), ForeignHandler)
+        foreign_srv = FastHTTPServer(("127.0.0.1", foreign_port), ForeignHandler)
         t = threading.Thread(target=foreign_srv.serve_forever, daemon=True)
         t.start()
         try:
